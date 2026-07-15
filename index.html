@@ -1,0 +1,1370 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Nachi Factory 4 — Store Engineering</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.26.2/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif; margin: 0; }
+    input[type=number]::-webkit-inner-spin-button,
+    input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel" data-presets="react">
+    const { useState, useEffect, useCallback } = React;
+
+    /* ---- Inline lucide icon set ---- */
+    const ICON_SVG = {
+      "Package": "<path d=\"M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z\" /> <path d=\"M12 22V12\" /> <polyline points=\"3.29 7 12 12 20.71 7\" /> <path d=\"m7.5 4.27 9 5.15\" />",
+      "ClipboardList": "<rect width=\"8\" height=\"4\" x=\"8\" y=\"2\" rx=\"1\" ry=\"1\" /> <path d=\"M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2\" /> <path d=\"M12 11h4\" /> <path d=\"M12 16h4\" /> <path d=\"M8 11h.01\" /> <path d=\"M8 16h.01\" />",
+      "ShoppingCart": "<circle cx=\"8\" cy=\"21\" r=\"1\" /> <circle cx=\"19\" cy=\"21\" r=\"1\" /> <path d=\"M2.05 2.05h2l2.66 12.42a2 2 0 0 0 2 1.58h9.78a2 2 0 0 0 1.95-1.57l1.65-7.43H5.12\" />",
+      "Users": "<path d=\"M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2\" /> <path d=\"M16 3.128a4 4 0 0 1 0 7.744\" /> <path d=\"M22 21v-2a4 4 0 0 0-3-3.87\" /> <circle cx=\"9\" cy=\"7\" r=\"4\" />",
+      "LogOut": "<path d=\"m16 17 5-5-5-5\" /> <path d=\"M21 12H9\" /> <path d=\"M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4\" />",
+      "Plus": "<path d=\"M5 12h14\" /> <path d=\"M12 5v14\" />",
+      "Search": "<path d=\"m21 21-4.34-4.34\" /> <circle cx=\"11\" cy=\"11\" r=\"8\" />",
+      "Check": "<path d=\"M20 6 9 17l-5-5\" />",
+      "X": "<path d=\"M18 6 6 18\" /> <path d=\"m6 6 12 12\" />",
+      "Clock": "<circle cx=\"12\" cy=\"12\" r=\"10\" /> <path d=\"M12 6v6l4 2\" />",
+      "AlertTriangle": "<path d=\"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3\" /> <path d=\"M12 9v4\" /> <path d=\"M12 17h.01\" />",
+      "Upload": "<path d=\"M12 3v12\" /> <path d=\"m17 8-5-5-5 5\" /> <path d=\"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\" />",
+      "ChevronRight": "<path d=\"m9 18 6-6-6-6\" />",
+      "Trash2": "<path d=\"M10 11v6\" /> <path d=\"M14 11v6\" /> <path d=\"M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6\" /> <path d=\"M3 6h18\" /> <path d=\"M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2\" />",
+      "Edit2": "<path d=\"M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7\" /> <path d=\"M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z\" />",
+      "LayoutDashboard": "<rect width=\"7\" height=\"9\" x=\"3\" y=\"3\" rx=\"1\" /> <rect width=\"7\" height=\"5\" x=\"14\" y=\"3\" rx=\"1\" /> <rect width=\"7\" height=\"9\" x=\"14\" y=\"12\" rx=\"1\" /> <rect width=\"7\" height=\"5\" x=\"3\" y=\"16\" rx=\"1\" />",
+      "Boxes": "<path d=\"M2.97 12.92A2 2 0 0 0 2 14.63v3.24a2 2 0 0 0 .97 1.71l3 1.8a2 2 0 0 0 2.06 0L12 19v-5.5l-5-3-4.03 2.42Z\" /> <path d=\"m7 16.5-4.74-2.85\" /> <path d=\"m7 16.5 5-3\" /> <path d=\"M7 16.5v5.17\" /> <path d=\"M12 13.5V19l3.97 2.38a2 2 0 0 0 2.06 0l3-1.8a2 2 0 0 0 .97-1.71v-3.24a2 2 0 0 0-.97-1.71L17 10.5l-5 3Z\" /> <path d=\"m17 16.5-5-3\" /> <path d=\"m17 16.5 4.74-2.85\" /> <path d=\"M17 16.5v5.17\" /> <path d=\"M7.97 4.42A2 2 0 0 0 7 6.13v4.37l5 3 5-3V6.13a2 2 0 0 0-.97-1.71l-3-1.8a2 2 0 0 0-2.06 0l-3 1.8Z\" /> <path d=\"M12 8 7.26 5.15\" /> <path d=\"m12 8 4.74-2.85\" /> <path d=\"M12 13.5V8\" />",
+      "FileText": "<path d=\"M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z\" /> <path d=\"M14 2v5a1 1 0 0 0 1 1h5\" /> <path d=\"M10 9H8\" /> <path d=\"M16 13H8\" /> <path d=\"M16 17H8\" />",
+      "TrendingDown": "<path d=\"M16 17h6v-6\" /> <path d=\"m22 17-8.5-8.5-5 5L2 7\" />",
+      "Layers": "<path d=\"M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z\" /> <path d=\"M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12\" /> <path d=\"M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17\" />",
+      "Circle": "<circle cx=\"12\" cy=\"12\" r=\"10\" />",
+      "ShieldCheck": "<path d=\"M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z\" /> <path d=\"m9 12 2 2 4-4\" />",
+      "Factory": "<path d=\"M12 16h.01\" /> <path d=\"M16 16h.01\" /> <path d=\"M3 19a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8.5a.5.5 0 0 0-.769-.422l-4.462 2.844A.5.5 0 0 1 15 10.5v-2a.5.5 0 0 0-.769-.422L9.77 10.922A.5.5 0 0 1 9 10.5V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2z\" /> <path d=\"M8 16h.01\" />",
+      "Home": "<path d=\"M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8\" /> <path d=\"M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z\" />"
+    };
+    function makeIcon(name) {
+      return function IconComponent(props) {
+        const { size = 24, strokeWidth = 2, className = "", style = {} } = props || {};
+        return React.createElement("svg", {
+          xmlns: "http://www.w3.org/2000/svg",
+          width: size, height: size, viewBox: "0 0 24 24",
+          fill: "none", stroke: "currentColor",
+          strokeWidth: strokeWidth, strokeLinecap: "round", strokeLinejoin: "round",
+          className, style,
+          dangerouslySetInnerHTML: { __html: ICON_SVG[name] || "" }
+        });
+      };
+    }
+    const Package = makeIcon("Package");
+    const ClipboardList = makeIcon("ClipboardList");
+    const ShoppingCart = makeIcon("ShoppingCart");
+    const Users = makeIcon("Users");
+    const LogOut = makeIcon("LogOut");
+    const Plus = makeIcon("Plus");
+    const Search = makeIcon("Search");
+    const Check = makeIcon("Check");
+    const X = makeIcon("X");
+    const Clock = makeIcon("Clock");
+    const AlertTriangle = makeIcon("AlertTriangle");
+    const Upload = makeIcon("Upload");
+    const ChevronRight = makeIcon("ChevronRight");
+    const Trash2 = makeIcon("Trash2");
+    const Edit2 = makeIcon("Edit2");
+    const LayoutDashboard = makeIcon("LayoutDashboard");
+    const Boxes = makeIcon("Boxes");
+    const FileText = makeIcon("FileText");
+    const TrendingDown = makeIcon("TrendingDown");
+    const Layers = makeIcon("Layers");
+    const Circle = makeIcon("Circle");
+    const ShieldCheck = makeIcon("ShieldCheck");
+    const Factory = makeIcon("Factory");
+    const Home = makeIcon("Home");
+
+    /* ================= APP CODE ================= */
+// ---------- Constants ----------
+const DEPARTMENTS = [
+  { id: "first_grinding", name: "First Grinding", color: "#1E3A5F", icon: "layers" },
+  { id: "grinding", name: "Grinding", color: "#B45309", icon: "circle" },
+  { id: "assembly", name: "Assembly", color: "#5B21B6", icon: "box" },
+];
+
+const ADMIN_DEPT = { id: "admin", name: "Admin", color: "#065F46", icon: "shield" };
+
+// "ส่วนกลาง" catalog visible to every department
+const CENTRAL = { id: "central", name: "ส่วนกลาง", color: "#475569" };
+
+const ALL_DEPTS = [...DEPARTMENTS, ADMIN_DEPT];
+const deptById = (id) => ALL_DEPTS.find((d) => d.id === id) || ADMIN_DEPT;
+
+// Options shown in the admin "add item" department selector
+const ITEM_DEPT_OPTIONS = [CENTRAL, ...DEPARTMENTS];
+const itemDeptName = (id) => (ITEM_DEPT_OPTIONS.find((d) => d.id === id) || CENTRAL).name;
+const itemDeptColor = (id) => (ITEM_DEPT_OPTIONS.find((d) => d.id === id) || CENTRAL).color;
+
+// Items a given user can see: admin sees all; a department sees central + its own items
+const visibleItems = (items, user) =>
+  user.id === "admin" ? items : items.filter((i) => i.deptId === "central" || i.deptId === user.id);
+
+const SEED_ITEMS = [
+  { id: "p1", sku: "ST-001", name: "กระดาษ A4 80 แกรม", unit: "รีม", stock: 42, minStock: 20, price: 115, category: "เครื่องเขียน", deptId: "central" },
+  { id: "p2", sku: "ST-002", name: "ปากกาลูกลื่นสีน้ำเงิน", unit: "ด้าม", stock: 8, minStock: 30, price: 6, category: "เครื่องเขียน", deptId: "central" },
+  { id: "p3", sku: "ST-003", name: "หมึกพิมพ์ HP 680", unit: "ตลับ", stock: 3, minStock: 5, price: 590, category: "อุปกรณ์คอม", deptId: "central" },
+  { id: "p4", sku: "GR-101", name: "หินเจียร CBN #400", unit: "ชิ้น", stock: 5, minStock: 4, price: 3200, category: "อะไหล่เครื่อง", deptId: "first_grinding" },
+  { id: "p5", sku: "GR-201", name: "น้ำยาหล่อเย็น Grinding", unit: "แกลลอน", stock: 9, minStock: 6, price: 450, category: "สารเคมี", deptId: "grinding" },
+  { id: "p6", sku: "AS-301", name: "ถุงมือไนไตรล์ (กล่อง)", unit: "กล่อง", stock: 6, minStock: 15, price: 220, category: "ความปลอดภัย", deptId: "assembly" },
+];
+
+const STATUS_META = {
+  pending: { label: "รออนุมัติ", color: "#B45309", bg: "#FEF3E2" },
+  approved: { label: "อนุมัติแล้ว", color: "#065F46", bg: "#ECFDF5" },
+  rejected: { label: "ปฏิเสธ", color: "#991B1B", bg: "#FEF2F2" },
+  fulfilled: { label: "เบิกจ่ายแล้ว", color: "#1E3A5F", bg: "#EFF4FA" },
+  ordered: { label: "สั่งซื้อแล้ว", color: "#5B21B6", bg: "#F5F3FF" },
+  received: { label: "รับของแล้ว", color: "#065F46", bg: "#ECFDF5" },
+};
+
+const uid = () => Math.random().toString(36).slice(2, 10);
+const fmtDate = (d) => new Date(d).toLocaleDateString("th-TH", { day: "2-digit", month: "short", year: "2-digit" });
+const fmtMoney = (n) => n.toLocaleString("th-TH", { minimumFractionDigits: 0 });
+
+// Parse a single CSV line respecting quoted fields (handles commas & escaped quotes inside quotes)
+function parseCSVLine(line) {
+  const out = [];
+  let cur = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (line[i + 1] === '"') { cur += '"'; i++; }
+        else inQuotes = false;
+      } else cur += ch;
+    } else {
+      if (ch === '"') inQuotes = true;
+      else if (ch === ",") { out.push(cur); cur = ""; }
+      else cur += ch;
+    }
+  }
+  out.push(cur);
+  return out.map((c) => c.trim());
+}
+
+// Safely coerce a numeric input; returns fallback when empty / NaN / negative
+function toNum(v, fallback = 0) {
+  if (v === "" || v === null || v === undefined) return fallback;
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
+// ---------- Storage helpers (localStorage-backed) ----------
+const LS_PREFIX = "nachi_store_";
+async function loadAll() {
+  const keys = ["items", "requisitions", "purchaseOrders"];
+  const out = {};
+  for (const k of keys) {
+    try {
+      const raw = localStorage.getItem(LS_PREFIX + k);
+      out[k] = raw ? JSON.parse(raw) : null;
+    } catch {
+      out[k] = null;
+    }
+  }
+  return out;
+}
+async function save(key, value) {
+  try {
+    localStorage.setItem(LS_PREFIX + key, JSON.stringify(value));
+  } catch (e) {
+    console.error("storage save failed", key, e);
+  }
+}
+
+// ---------- Small UI atoms ----------
+function Badge({ status }) {
+  const m = STATUS_META[status] || { label: status, color: "#475569", bg: "#F1F5F9" };
+  return (
+    <span
+      style={{ color: m.color, background: m.bg }}
+      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium whitespace-nowrap"
+    >
+      {m.label}
+    </span>
+  );
+}
+
+function EmptyState({ icon: Icon, title, sub }) {
+  return (
+    <div className="flex flex-col items-center justify-center py-16 text-center">
+      <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center mb-3">
+        <Icon size={22} className="text-slate-400" />
+      </div>
+      <div className="font-medium text-slate-600">{title}</div>
+      {sub && <div className="text-sm text-slate-400 mt-1 max-w-xs">{sub}</div>}
+    </div>
+  );
+}
+
+// Reusable confirmation dialog
+function ConfirmModal({ open, title, message, confirmLabel = "ยืนยัน", tone = "primary", onConfirm, onClose }) {
+  if (!open) return null;
+  const toneCls =
+    tone === "danger"
+      ? "bg-red-600 hover:bg-red-700"
+      : tone === "warning"
+      ? "bg-amber-600 hover:bg-amber-700"
+      : "bg-[#1E3A5F] hover:bg-[#16304F]";
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-[60]" onClick={onClose}>
+      <div className="bg-white rounded-2xl p-6 w-full max-w-sm" onClick={(e) => e.stopPropagation()}>
+        <h3 className="font-semibold text-slate-800 mb-1">{title}</h3>
+        {message && <p className="text-sm text-slate-500 mb-5">{message}</p>}
+        <div className="flex gap-2">
+          <button onClick={onClose} className="flex-1 py-2.5 rounded-xl border border-slate-200 text-sm font-medium text-slate-600 hover:bg-slate-50">
+            ยกเลิก
+          </button>
+          <button onClick={() => { onConfirm(); onClose(); }} className={`flex-1 py-2.5 rounded-xl text-white text-sm font-medium ${toneCls}`}>
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Lightweight toast notifications
+function Toast({ toasts }) {
+  return (
+    <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[70] flex flex-col gap-2 items-center w-full max-w-sm px-4">
+      {toasts.map((t) => (
+        <div
+          key={t.id}
+          className={`w-full px-4 py-3 rounded-xl shadow-lg text-sm font-medium flex items-center gap-2 ${
+            t.type === "error" ? "bg-red-600 text-white" : t.type === "success" ? "bg-emerald-600 text-white" : "bg-slate-800 text-white"
+          }`}
+        >
+          {t.type === "error" ? <AlertTriangle size={15} /> : <Check size={15} />}
+          {t.msg}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ---------- Login ----------
+const DEPT_ICON = { layers: Layers, circle: Circle, box: Package, shield: ShieldCheck };
+
+// Soft 3D-style icon tiles: gradient fill + inner highlight + colored glow
+function DeptButton({ dept, onClick }) {
+  const Icon = DEPT_ICON[dept.icon] || Package;
+  return (
+    <button
+      onClick={onClick}
+      className="w-full flex items-center justify-between p-3.5 rounded-2xl hover:bg-white/40 active:scale-[0.99] transition-all group"
+    >
+      <div className="flex items-center gap-3.5">
+        <div
+          className="w-12 h-12 rounded-2xl flex items-center justify-center text-white shrink-0 relative overflow-hidden"
+          style={{
+            background: `linear-gradient(145deg, ${dept.color}, ${dept.color}cc)`,
+            boxShadow: `0 6px 16px -4px ${dept.color}88, inset 0 1px 1px rgba(255,255,255,0.45), inset 0 -2px 3px rgba(0,0,0,0.15)`,
+          }}
+        >
+          <span className="absolute inset-x-1.5 top-1 h-1/3 rounded-full bg-white/30 blur-[2px]" />
+          <Icon size={21} className="relative" strokeWidth={2.2} />
+        </div>
+        <div className="text-left">
+          <div className="font-semibold text-slate-800 text-[15px] leading-tight">{dept.name}</div>
+          <div className="text-xs text-slate-500 mt-0.5">เบิกของ · สั่งซื้อ · ติดตามสถานะ</div>
+        </div>
+      </div>
+      <ChevronRight size={18} className="text-slate-400 group-hover:text-slate-600 group-hover:translate-x-0.5 transition-transform" />
+    </button>
+  );
+}
+
+function Login({ onLogin }) {
+  // Automated-factory background (Lenny Kuhne, free Unsplash License) with a CSS-gradient fallback underneath
+  const bgImage =
+    "https://images.unsplash.com/photo-1567789884554-0b844b597180?fm=jpg&q=70&w=1400&auto=format&fit=crop";
+
+  return (
+    <div className="min-h-screen relative flex items-center justify-center p-5 overflow-hidden">
+      {/* Fallback gradient (always present, sits under the photo) */}
+      <div
+        className="absolute inset-0"
+        style={{
+          background:
+            "linear-gradient(160deg, #dbeafe 0%, #ede9fe 40%, #fce7f3 75%, #e0f2fe 100%)",
+        }}
+      />
+      {/* Factory photo layer */}
+      <div
+        className="absolute inset-0 bg-cover bg-center opacity-60"
+        style={{ backgroundImage: `url("${bgImage}")` }}
+      />
+      {/* Color wash + soft glow to match the neon-glass look */}
+      <div
+        className="absolute inset-0"
+        style={{
+          background:
+            "radial-gradient(120% 80% at 50% 10%, rgba(191,219,254,0.35), transparent 60%), radial-gradient(100% 60% at 50% 100%, rgba(216,180,254,0.4), transparent 55%), linear-gradient(180deg, rgba(255,255,255,0.15), rgba(255,255,255,0.55))",
+        }}
+      />
+
+      {/* Content */}
+      <div className="w-full max-w-md relative z-10">
+        <div className="text-center mb-6">
+          <div className="inline-flex items-center justify-center w-16 h-16 rounded-3xl mb-4 relative overflow-hidden"
+            style={{
+              background: "linear-gradient(145deg, rgba(255,255,255,0.7), rgba(255,255,255,0.35))",
+              boxShadow: "0 8px 24px -6px rgba(99,102,241,0.4), inset 0 1px 1px rgba(255,255,255,0.8)",
+              backdropFilter: "blur(8px)",
+            }}
+          >
+            <Factory size={30} className="text-indigo-500 relative" strokeWidth={2} />
+          </div>
+          <div className="text-slate-500 text-xs font-semibold tracking-[0.25em] uppercase mb-1">Nachi Factory 4</div>
+          <h1 className="text-3xl font-bold text-slate-800 tracking-tight">Store Engineering</h1>
+          <p className="text-slate-600 text-sm mt-2 font-medium">เลือกแผนกเพื่อเข้าสู่ระบบ</p>
+        </div>
+
+        {/* Production departments — glass card */}
+        <div
+          className="rounded-3xl p-2.5 border border-white/60"
+          style={{
+            background: "rgba(255,255,255,0.35)",
+            backdropFilter: "blur(20px)",
+            WebkitBackdropFilter: "blur(20px)",
+            boxShadow: "0 12px 40px -12px rgba(79,70,229,0.25), inset 0 1px 1px rgba(255,255,255,0.6)",
+          }}
+        >
+          {DEPARTMENTS.map((d) => (
+            <DeptButton key={d.id} dept={d} onClick={() => onLogin(d)} />
+          ))}
+        </div>
+
+        <div className="flex items-center gap-3 my-4 px-2">
+          <div className="flex-1 h-px bg-slate-400/30" />
+          <span className="text-xs text-slate-500 font-medium">แผนกจัดการระบบ</span>
+          <div className="flex-1 h-px bg-slate-400/30" />
+        </div>
+
+        {/* Admin — separate glass card */}
+        <div
+          className="rounded-3xl p-2.5 border border-white/60"
+          style={{
+            background: "rgba(255,255,255,0.35)",
+            backdropFilter: "blur(20px)",
+            WebkitBackdropFilter: "blur(20px)",
+            boxShadow: "0 12px 40px -12px rgba(6,95,70,0.2), inset 0 1px 1px rgba(255,255,255,0.6)",
+          }}
+        >
+          <DeptButton dept={ADMIN_DEPT} onClick={() => onLogin(ADMIN_DEPT)} />
+        </div>
+
+        <p className="text-center text-slate-500 text-xs mt-6">ต้นแบบสำหรับทดลองใช้งาน — ไม่ต้องใช้รหัสผ่าน</p>
+      </div>
+    </div>
+  );
+}
+
+// ---------- Dashboard ----------
+function Dashboard({ items, requisitions, purchaseOrders, user }) {
+  const isAdmin = user.id === "admin";
+  const myItems = visibleItems(items, user);
+  const lowStock = myItems.filter((i) => i.stock <= i.minStock);
+  const myReqs = requisitions.filter((r) => r.deptId === user.id);
+  const pendingReqs = requisitions.filter((r) => r.status === "pending" && (isAdmin || r.deptId === user.id));
+  const openPOs = purchaseOrders.filter((p) => p.status === "ordered" && (isAdmin || p.deptId === user.id));
+
+  const cards = [
+    { label: "สินค้าใกล้หมด", value: lowStock.length, icon: TrendingDown, color: "#B45309" },
+    { label: isAdmin ? "รออนุมัติ (ทุกแผนก)" : "คำขอของแผนก", value: isAdmin ? pendingReqs.length : myReqs.length, icon: ClipboardList, color: "#1E3A5F" },
+    { label: "สั่งซื้อค้างรับ", value: openPOs.length, icon: ShoppingCart, color: "#5B21B6" },
+    { label: isAdmin ? "สินค้าทั้งหมด" : "สินค้าของแผนก", value: myItems.length, icon: Package, color: "#065F46" },
+  ];
+
+  return (
+    <div className="space-y-6">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {cards.map((c) => (
+          <div key={c.label} className="bg-white rounded-2xl p-5 border border-slate-100">
+            <div className="w-9 h-9 rounded-lg flex items-center justify-center mb-3" style={{ background: `${c.color}15` }}>
+              <c.icon size={18} style={{ color: c.color }} />
+            </div>
+            <div className="text-2xl font-semibold text-slate-800">{c.value}</div>
+            <div className="text-xs text-slate-400 mt-1">{c.label}</div>
+          </div>
+        ))}
+      </div>
+
+      {lowStock.length > 0 && (
+        <div className="bg-white rounded-2xl border border-slate-100 overflow-hidden">
+          <div className="px-5 py-4 border-b border-slate-100 flex items-center gap-2">
+            <AlertTriangle size={16} className="text-amber-600" />
+            <h3 className="font-medium text-slate-800 text-sm">สินค้าใกล้หมดสต็อก</h3>
+          </div>
+          <div className="divide-y divide-slate-50">
+            {lowStock.map((i) => (
+              <div key={i.id} className="px-5 py-3 flex items-center justify-between">
+                <div>
+                  <div className="text-sm font-medium text-slate-700">{i.name}</div>
+                  <div className="text-xs text-slate-400">{i.sku} · {i.category}</div>
+                </div>
+                <div className="text-right">
+                  <div className="text-sm font-semibold text-amber-700">{i.stock} {i.unit}</div>
+                  <div className="text-xs text-slate-400">ขั้นต่ำ {i.minStock}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {!isAdmin && (
+        <div className="bg-white rounded-2xl border border-slate-100 overflow-hidden">
+          <div className="px-5 py-4 border-b border-slate-100 flex items-center gap-2">
+            <Package size={16} className="text-emerald-600" />
+            <h3 className="font-medium text-slate-800 text-sm">คลังสินค้า (ภาพรวม)</h3>
+          </div>
+          {myItems.length === 0 ? (
+            <EmptyState icon={Package} title="ยังไม่มีสินค้าสำหรับแผนกนี้" sub="แอดมินสามารถเพิ่มสินค้าให้แผนกได้" />
+          ) : (
+            <div className="divide-y divide-slate-50">
+              {myItems.map((i) => {
+                const low = i.stock <= i.minStock;
+                return (
+                  <div key={i.id} className="px-5 py-3 flex items-center justify-between">
+                    <div>
+                      <div className="text-sm font-medium text-slate-700">{i.name}</div>
+                      <div className="text-xs text-slate-400">
+                        {i.sku} · {i.category}
+                        <span className="ml-1.5 px-1.5 py-0.5 rounded text-[10px]" style={{ color: itemDeptColor(i.deptId), background: `${itemDeptColor(i.deptId)}12` }}>
+                          {itemDeptName(i.deptId)}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className={`text-sm font-semibold ${low ? "text-amber-700" : "text-slate-600"}`}>{i.stock} {i.unit}</div>
+                      {low && <div className="text-xs text-amber-600">ใกล้หมด</div>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="bg-white rounded-2xl border border-slate-100 overflow-hidden">
+        <div className="px-5 py-4 border-b border-slate-100">
+          <h3 className="font-medium text-slate-800 text-sm">คำขอเบิกล่าสุด{isAdmin ? " (ทุกแผนก)" : ""}</h3>
+        </div>
+        {(() => {
+          const scoped = isAdmin ? requisitions : requisitions.filter((r) => r.deptId === user.id);
+          return scoped.length === 0 ? (
+            <EmptyState icon={ClipboardList} title="ยังไม่มีคำขอเบิก" />
+          ) : (
+            <div className="divide-y divide-slate-50">
+              {scoped.slice(0, 5).map((r) => (
+                <div key={r.id} className="px-5 py-3 flex items-center justify-between">
+                  <div>
+                    <div className="text-sm font-medium text-slate-700">{r.itemName} × {r.qty}</div>
+                    <div className="text-xs text-slate-400">{r.deptName} · {fmtDate(r.createdAt)}</div>
+                  </div>
+                  <Badge status={r.status} />
+                </div>
+              ))}
+            </div>
+          );
+        })()}
+      </div>
+    </div>
+  );
+}
+
+// ---------- Inventory ----------
+function Inventory({ items, setItems, user, notify, confirm }) {
+  const [q, setQ] = useState("");
+  const [showAdd, setShowAdd] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const canManage = user.id === "admin";
+
+  const filtered = items.filter(
+    (i) => i.name.toLowerCase().includes(q.toLowerCase()) || i.sku.toLowerCase().includes(q.toLowerCase())
+  );
+
+  const handleDelete = (item) =>
+    confirm({
+      title: "ยืนยันการลบสินค้า?",
+      message: `ต้องการลบ "${item.name}" ออกจากคลังใช่หรือไม่ การลบไม่สามารถย้อนกลับได้`,
+      confirmLabel: "ลบสินค้า",
+      tone: "danger",
+      onConfirm: () => {
+        setItems((prev) => prev.filter((i) => i.id !== item.id));
+        notify("success", "ลบสินค้าแล้ว");
+      },
+    });
+
+  const handleCSV = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const text = evt.target.result.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+        const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+        if (lines.length < 2) {
+          notify("error", "ไฟล์ CSV ต้องมีหัวตารางและอย่างน้อย 1 แถว");
+          return;
+        }
+        const header = parseCSVLine(lines[0]).map((h) => h.toLowerCase());
+        const idx = (name) => header.indexOf(name);
+        const newItems = lines.slice(1).map((line) => {
+          const cols = parseCSVLine(line);
+          return {
+            id: uid(),
+            sku: cols[idx("sku")] || `ST-${uid().slice(0, 4).toUpperCase()}`,
+            name: cols[idx("name")] || cols[0] || "ไม่ระบุชื่อ",
+            unit: cols[idx("unit")] || "ชิ้น",
+            stock: toNum(cols[idx("stock")], 0),
+            minStock: toNum(cols[idx("minstock")], 5),
+            price: toNum(cols[idx("price")], 0),
+            category: cols[idx("category")] || "ทั่วไป",
+            deptId: (() => {
+              const d = (cols[idx("dept")] || cols[idx("deptid")] || "").toLowerCase().trim();
+              return ITEM_DEPT_OPTIONS.some((o) => o.id === d) ? d : "central";
+            })(),
+          };
+        });
+        setItems((prev) => [...prev, ...newItems]);
+        notify("success", `นำเข้าสินค้า ${newItems.length} รายการสำเร็จ`);
+      } catch (err) {
+        notify("error", "อ่านไฟล์ CSV ไม่สำเร็จ ตรวจสอบรูปแบบไฟล์");
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-col sm:flex-row gap-3 sm:items-center sm:justify-between">
+        <div className="relative flex-1 max-w-sm">
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="ค้นหาชื่อสินค้า หรือ SKU"
+            className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#1E3A5F]/20 focus:border-[#1E3A5F]"
+          />
+        </div>
+        {canManage && (
+          <div className="flex gap-2">
+            <label className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl border border-slate-200 text-sm font-medium text-slate-600 hover:bg-slate-50 cursor-pointer transition-colors">
+              <Upload size={15} /> นำเข้า CSV
+              <input type="file" accept=".csv" onChange={handleCSV} className="hidden" />
+            </label>
+            <button
+              onClick={() => setShowAdd(true)}
+              className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-[#1E3A5F] text-white text-sm font-medium hover:bg-[#16304F] transition-colors"
+            >
+              <Plus size={15} /> เพิ่มสินค้า
+            </button>
+          </div>
+        )}
+      </div>
+
+      <div className="bg-white rounded-2xl border border-slate-100 overflow-hidden">
+        {filtered.length === 0 ? (
+          <EmptyState icon={Package} title="ไม่พบสินค้า" sub="ลองค้นหาด้วยคำอื่น หรือเพิ่มสินค้าใหม่" />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-slate-400 border-b border-slate-100">
+                  <th className="px-5 py-3 font-medium">สินค้า</th>
+                  <th className="px-5 py-3 font-medium">แผนก</th>
+                  <th className="px-5 py-3 font-medium">หมวดหมู่</th>
+                  <th className="px-5 py-3 font-medium">คงเหลือ</th>
+                  <th className="px-5 py-3 font-medium">ราคา/หน่วย</th>
+                  <th className="px-5 py-3 font-medium text-right">การทำงาน</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50">
+                {filtered.map((i) => {
+                  const low = i.stock <= i.minStock;
+                  return (
+                    <tr key={i.id} className="hover:bg-slate-50/60">
+                      <td className="px-5 py-3.5">
+                        <div className="font-medium text-slate-700">{i.name}</div>
+                        <div className="text-xs text-slate-400">{i.sku}</div>
+                      </td>
+                      <td className="px-5 py-3.5">
+                        <span className="px-2 py-0.5 rounded-full text-xs font-medium" style={{ color: itemDeptColor(i.deptId), background: `${itemDeptColor(i.deptId)}15` }}>
+                          {itemDeptName(i.deptId)}
+                        </span>
+                      </td>
+                      <td className="px-5 py-3.5 text-slate-500">{i.category}</td>
+                      <td className="px-5 py-3.5">
+                        <span className={low ? "text-amber-700 font-medium" : "text-slate-600"}>
+                          {i.stock} {i.unit}
+                        </span>
+                        {low && <span className="ml-2 text-xs text-amber-600">● ใกล้หมด</span>}
+                      </td>
+                      <td className="px-5 py-3.5 text-slate-500">฿{fmtMoney(i.price)}</td>
+                      <td className="px-5 py-3.5">
+                        <div className="flex justify-end gap-2">
+                          <button onClick={() => setEditing(i)} className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600">
+                            <Edit2 size={14} />
+                          </button>
+                          <button onClick={() => handleDelete(i)} className="p-1.5 rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-500">
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {(showAdd || editing) && (
+        <ItemForm
+          initial={editing}
+          notify={notify}
+          onClose={() => { setShowAdd(false); setEditing(null); }}
+          onSave={(data) => {
+            if (editing) {
+              setItems((prev) => prev.map((i) => (i.id === editing.id ? { ...i, ...data } : i)));
+              notify("success", "บันทึกการแก้ไขแล้ว");
+            } else {
+              setItems((prev) => [...prev, { id: uid(), ...data }]);
+              notify("success", "เพิ่มสินค้าใหม่แล้ว");
+            }
+            setShowAdd(false);
+            setEditing(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function ItemForm({ initial, onSave, onClose, notify }) {
+  const [form, setForm] = useState(
+    initial
+      ? { ...initial, deptId: initial.deptId || "central", stock: String(initial.stock), minStock: String(initial.minStock), price: String(initial.price) }
+      : { sku: "", name: "", unit: "ชิ้น", stock: "0", minStock: "5", price: "0", category: "ทั่วไป", deptId: "central" }
+  );
+
+  const handleSave = () => {
+    if (!form.name.trim()) {
+      notify?.("error", "กรุณากรอกชื่อสินค้า");
+      return;
+    }
+    const stock = toNum(form.stock, NaN);
+    const minStock = toNum(form.minStock, NaN);
+    const price = toNum(form.price, NaN);
+    if ([stock, minStock, price].some((n) => Number.isNaN(n))) {
+      notify?.("error", "จำนวนคงเหลือ / ขั้นต่ำ / ราคา ต้องเป็นตัวเลขไม่ติดลบ");
+      return;
+    }
+    onSave({
+      sku: form.sku.trim(),
+      name: form.name.trim(),
+      unit: form.unit.trim() || "ชิ้น",
+      category: form.category.trim() || "ทั่วไป",
+      deptId: form.deptId,
+      stock,
+      minStock,
+      price,
+    });
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={onClose}>
+      <div className="bg-white rounded-2xl p-6 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+        <h3 className="font-semibold text-slate-800 mb-4">{initial ? "แก้ไขสินค้า" : "เพิ่มสินค้าใหม่"}</h3>
+        <div className="space-y-3">
+          <Field label="ชื่อสินค้า" value={form.name} onChange={(v) => setForm({ ...form, name: v })} />
+          <label className="block">
+            <span className="text-xs text-slate-500 mb-1 block">แผนก (ผู้ใช้สินค้า)</span>
+            <select
+              value={form.deptId}
+              onChange={(e) => setForm({ ...form, deptId: e.target.value })}
+              className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#1E3A5F]/20"
+            >
+              {ITEM_DEPT_OPTIONS.map((d) => (
+                <option key={d.id} value={d.id}>{d.name}{d.id === "central" ? " (ทุกแผนกเห็น)" : ""}</option>
+              ))}
+            </select>
+          </label>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="SKU" value={form.sku} onChange={(v) => setForm({ ...form, sku: v })} />
+            <Field label="หมวดหมู่" value={form.category} onChange={(v) => setForm({ ...form, category: v })} />
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <Field label="หน่วย" value={form.unit} onChange={(v) => setForm({ ...form, unit: v })} />
+            <Field label="คงเหลือ" type="number" value={form.stock} onChange={(v) => setForm({ ...form, stock: v })} />
+            <Field label="ขั้นต่ำ" type="number" value={form.minStock} onChange={(v) => setForm({ ...form, minStock: v })} />
+          </div>
+          <Field label="ราคา/หน่วย (บาท)" type="number" value={form.price} onChange={(v) => setForm({ ...form, price: v })} />
+        </div>
+        <div className="flex gap-2 mt-5">
+          <button onClick={onClose} className="flex-1 py-2.5 rounded-xl border border-slate-200 text-sm font-medium text-slate-600 hover:bg-slate-50">
+            ยกเลิก
+          </button>
+          <button
+            onClick={handleSave}
+            className="flex-1 py-2.5 rounded-xl bg-[#1E3A5F] text-white text-sm font-medium hover:bg-[#16304F]"
+          >
+            บันทึก
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Field({ label, value, onChange, type = "text" }) {
+  return (
+    <label className="block">
+      <span className="text-xs text-slate-500 mb-1 block">{label}</span>
+      <input
+        type={type}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#1E3A5F]/20 focus:border-[#1E3A5F]"
+      />
+    </label>
+  );
+}
+
+// ---------- Requisitions ----------
+function Requisitions({ requisitions, setRequisitions, items, setItems, user, purchaseOrders, setPurchaseOrders, notify, confirm }) {
+  const [filter, setFilter] = useState("all");
+  const [showNew, setShowNew] = useState(false);
+  const isAdmin = user.id === "admin";
+  const canApprove = isAdmin;
+  const myItems = visibleItems(items, user);
+
+  const submitNew = ({ item, qty, note }) => {
+    setRequisitions((prev) => [
+      {
+        id: uid(),
+        itemId: item.id,
+        itemName: item.name,
+        qty,
+        note,
+        status: "pending",
+        deptId: user.id,
+        deptName: user.name,
+        createdAt: Date.now(),
+      },
+      ...prev,
+    ]);
+    setShowNew(false);
+    notify("success", "ส่งคำขอเบิกแล้ว รออนุมัติ");
+  };
+
+  const list = requisitions
+    .filter((r) => (isAdmin ? true : r.deptId === user.id))
+    .filter((r) => filter === "all" || r.status === filter)
+    .sort((a, b) => b.createdAt - a.createdAt);
+
+  // Approve: verify stock, guard against double-processing, deduct atomically
+  const approve = (req) => {
+    const item = items.find((i) => i.id === req.itemId);
+    if (!item) {
+      notify("error", "ไม่พบสินค้านี้ในคลังแล้ว");
+      return;
+    }
+    if (item.stock < req.qty) {
+      notify("error", `สต็อกไม่พอ: คงเหลือ ${item.stock} ${item.unit} แต่ขอเบิก ${req.qty}`);
+      return;
+    }
+    confirm({
+      title: "ยืนยันการอนุมัติคำขอ?",
+      message: `อนุมัติเบิก "${req.itemName}" จำนวน ${req.qty} ${item.unit} — จะตัดสต็อกทันที`,
+      confirmLabel: "อนุมัติ",
+      onConfirm: () => {
+        let done = false;
+        setRequisitions((prev) =>
+          prev.map((r) => {
+            if (r.id === req.id && r.status === "pending") { done = true; return { ...r, status: "approved", decidedAt: Date.now() }; }
+            return r;
+          })
+        );
+        // only deduct if the request was actually still pending (guards double-click)
+        setItems((prev) => {
+          if (!done) return prev;
+          return prev.map((i) => (i.id === req.itemId ? { ...i, stock: Math.max(0, i.stock - req.qty) } : i));
+        });
+        if (done) notify("success", "อนุมัติและตัดสต็อกแล้ว");
+      },
+    });
+  };
+
+  const reject = (req) => {
+    confirm({
+      title: "ยืนยันการปฏิเสธคำขอ?",
+      message: `ปฏิเสธคำขอเบิก "${req.itemName}" จำนวน ${req.qty}`,
+      confirmLabel: "ปฏิเสธ",
+      tone: "danger",
+      onConfirm: () => {
+        setRequisitions((prev) =>
+          prev.map((r) => (r.id === req.id && r.status === "pending" ? { ...r, status: "rejected", decidedAt: Date.now() } : r))
+        );
+        notify("success", "ปฏิเสธคำขอแล้ว");
+      },
+    });
+  };
+
+  const raiseAsPO = (req) => {
+    const item = items.find((i) => i.id === req.itemId);
+    if (!item) { notify("error", "ไม่พบสินค้านี้ในคลัง"); return; }
+    setPurchaseOrders((prev) => [
+      {
+        id: uid(),
+        itemId: item.id,
+        itemName: item.name,
+        qty: Math.max(item.minStock * 2 - item.stock, req.qty),
+        unitPrice: item.price,
+        status: "ordered",
+        createdAt: Date.now(),
+        requestedBy: req.deptName,
+        deptId: req.deptId,
+        deptName: req.deptName,
+        fromRequisition: req.id,
+      },
+      ...prev,
+    ]);
+    setRequisitions((prev) => prev.map((x) => (x.id === req.id ? { ...x, raisedPO: true } : x)));
+    notify("success", "สร้างใบสั่งซื้อเพิ่มแล้ว");
+  };
+
+  const filters = ["all", "pending", "approved", "rejected", "fulfilled"];
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          {filters.map((f) => (
+            <button
+              key={f}
+              onClick={() => setFilter(f)}
+              className={`px-3.5 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors ${
+                filter === f ? "bg-[#1E3A5F] text-white" : "bg-white text-slate-500 border border-slate-200 hover:bg-slate-50"
+              }`}
+            >
+              {f === "all" ? "ทั้งหมด" : STATUS_META[f]?.label}
+            </button>
+          ))}
+        </div>
+        {!isAdmin && (
+          <button
+            onClick={() => setShowNew(true)}
+            className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-[#1E3A5F] text-white text-sm font-medium hover:bg-[#16304F] transition-colors shrink-0"
+          >
+            <Plus size={15} /> เบิกของ
+          </button>
+        )}
+      </div>
+
+      <div className="bg-white rounded-2xl border border-slate-100 overflow-hidden">
+        {list.length === 0 ? (
+          <EmptyState icon={ClipboardList} title="ไม่มีคำขอเบิกในหมวดนี้" />
+        ) : (
+          <div className="divide-y divide-slate-50">
+            {list.map((r) => (
+              <div key={r.id} className="px-5 py-4 flex items-center justify-between gap-4">
+                <div className="min-w-0">
+                  <div className="font-medium text-slate-700 text-sm truncate">
+                    {r.itemName} <span className="text-slate-400 font-normal">× {r.qty}</span>
+                  </div>
+                  <div className="text-xs text-slate-400 mt-0.5">
+                    {r.deptName} · {fmtDate(r.createdAt)}
+                  </div>
+                  {r.note && <div className="text-xs text-slate-500 mt-1 italic">"{r.note}"</div>}
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  {canApprove && r.status === "pending" ? (
+                    <>
+                      <button
+                        onClick={() => approve(r)}
+                        className="p-2 rounded-lg bg-emerald-50 text-emerald-600 hover:bg-emerald-100"
+                        title="อนุมัติ"
+                      >
+                        <Check size={15} />
+                      </button>
+                      <button
+                        onClick={() => reject(r)}
+                        className="p-2 rounded-lg bg-red-50 text-red-500 hover:bg-red-100"
+                        title="ปฏิเสธ"
+                      >
+                        <X size={15} />
+                      </button>
+                    </>
+                  ) : (
+                    <Badge status={r.status} />
+                  )}
+                  {canApprove && r.status === "approved" && !r.raisedPO && (
+                    <button
+                      onClick={() => raiseAsPO(r)}
+                      className="text-xs text-violet-600 hover:underline whitespace-nowrap"
+                    >
+                      สั่งซื้อเพิ่ม
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {showNew && (
+        <RequisitionForm items={myItems} notify={notify} onClose={() => setShowNew(false)} onSubmit={submitNew} />
+      )}
+    </div>
+  );
+}
+
+// Modal: create a new requisition by picking an item (scoped) + qty (capped at stock) + note
+function RequisitionForm({ items, onSubmit, onClose, notify }) {
+  const [itemId, setItemId] = useState(items[0]?.id || "");
+  const [qty, setQty] = useState("1");
+  const [note, setNote] = useState("");
+  const item = items.find((i) => i.id === itemId);
+  const qtyNum = toNum(qty, NaN);
+  const overStock = item && Number.isFinite(qtyNum) && qtyNum > item.stock;
+  const valid = item && Number.isFinite(qtyNum) && qtyNum > 0 && qtyNum <= item.stock;
+
+  const handleSubmit = () => {
+    if (!item) { notify?.("error", "กรุณาเลือกสินค้า"); return; }
+    if (!Number.isFinite(qtyNum) || qtyNum <= 0) { notify?.("error", "กรุณากรอกจำนวนที่ต้องการเบิก"); return; }
+    if (qtyNum > item.stock) { notify?.("error", `เบิกได้ไม่เกิน ${item.stock} ${item.unit} (คงเหลือในสต็อก)`); return; }
+    onSubmit({ item, qty: qtyNum, note: note.trim() });
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={onClose}>
+      <div className="bg-white rounded-2xl p-6 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+        <h3 className="font-semibold text-slate-800 mb-4">เบิกของ</h3>
+        {items.length === 0 ? (
+          <p className="text-sm text-slate-500 mb-4">ยังไม่มีสินค้าสำหรับแผนกนี้ กรุณาให้แอดมินเพิ่มสินค้าก่อน</p>
+        ) : (
+          <div className="space-y-3">
+            <label className="block">
+              <span className="text-xs text-slate-500 mb-1 block">สินค้า</span>
+              <select
+                value={itemId}
+                onChange={(e) => setItemId(e.target.value)}
+                className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#1E3A5F]/20"
+              >
+                {items.map((i) => <option key={i.id} value={i.id}>{i.name} ({i.sku}) — คงเหลือ {i.stock}</option>)}
+              </select>
+            </label>
+            <div>
+              <Field label={item ? `จำนวน (${item.unit}) — สูงสุด ${item.stock}` : "จำนวน"} type="number" value={qty} onChange={setQty} />
+              {overStock && <div className="text-xs text-red-500 mt-1">เกินจำนวนคงเหลือในสต็อก</div>}
+            </div>
+            <label className="block">
+              <span className="text-xs text-slate-500 mb-1 block">หมายเหตุ (ไม่บังคับ)</span>
+              <textarea
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                rows={2}
+                className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#1E3A5F]/20"
+                placeholder="เช่น ใช้สำหรับงานวันที่..."
+              />
+            </label>
+          </div>
+        )}
+        <div className="flex gap-2 mt-5">
+          <button onClick={onClose} className="flex-1 py-2.5 rounded-xl border border-slate-200 text-sm font-medium text-slate-600 hover:bg-slate-50">ยกเลิก</button>
+          <button
+            onClick={handleSubmit}
+            disabled={!valid}
+            className="flex-1 py-2.5 rounded-xl bg-[#1E3A5F] text-white text-sm font-medium hover:bg-[#16304F] disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            ส่งคำขอเบิก
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------- Purchase Orders ----------
+function PurchaseOrders({ purchaseOrders, setPurchaseOrders, items, setItems, user, notify, confirm }) {
+  const [showNew, setShowNew] = useState(false);
+  const isAdmin = user.id === "admin";
+  const canReceive = isAdmin;
+
+  const receive = (po) => {
+    confirm({
+      title: "ยืนยันรับของเข้าคลัง?",
+      message: `รับ "${po.itemName}" จำนวน ${po.qty} เข้าสต็อกใช่หรือไม่`,
+      confirmLabel: "รับของ",
+      onConfirm: () => {
+        let done = false;
+        setPurchaseOrders((prev) =>
+          prev.map((p) => {
+            if (p.id === po.id && p.status === "ordered") { done = true; return { ...p, status: "received", receivedAt: Date.now() }; }
+            return p;
+          })
+        );
+        setItems((prev) => {
+          if (!done) return prev;
+          return prev.map((i) => (i.id === po.itemId ? { ...i, stock: i.stock + po.qty } : i));
+        });
+        if (done) notify("success", "รับของเข้าคลังแล้ว");
+      },
+    });
+  };
+
+  const scoped = isAdmin ? purchaseOrders : purchaseOrders.filter((p) => p.deptId === user.id);
+  const sorted = [...scoped].sort((a, b) => b.createdAt - a.createdAt);
+  const totalOpenValue = scoped.filter(p => p.status === "ordered").reduce((s, p) => s + p.qty * p.unitPrice, 0);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div className="text-sm text-slate-500">
+          มูลค่าสั่งซื้อค้างรับ{isAdmin ? " (ทุกแผนก)" : ""}: <span className="font-semibold text-slate-700">฿{fmtMoney(totalOpenValue)}</span>
+        </div>
+        <button
+          onClick={() => setShowNew(true)}
+          className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-[#1E3A5F] text-white text-sm font-medium hover:bg-[#16304F] transition-colors"
+        >
+          <Plus size={15} /> สั่งซื้อ
+        </button>
+      </div>
+
+      <div className="bg-white rounded-2xl border border-slate-100 overflow-hidden">
+        {sorted.length === 0 ? (
+          <EmptyState icon={ShoppingCart} title="ยังไม่มีรายการสั่งซื้อ" sub="กดปุ่มสั่งซื้อเพื่อสร้างรายการใหม่ หรืออนุมัติคำขอเบิกแล้วสั่งซื้อเพิ่ม" />
+        ) : (
+          <div className="divide-y divide-slate-50">
+            {sorted.map((po) => (
+              <div key={po.id} className="px-5 py-4 flex items-center justify-between gap-4">
+                <div className="min-w-0">
+                  <div className="font-medium text-slate-700 text-sm">
+                    {po.itemName} <span className="text-slate-400 font-normal">× {po.qty}</span>
+                  </div>
+                  <div className="text-xs text-slate-400 mt-0.5">
+                    ฿{fmtMoney(po.qty * po.unitPrice)} · {po.deptName || po.requestedBy} · {fmtDate(po.createdAt)}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <Badge status={po.status} />
+                  {canReceive && po.status === "ordered" && (
+                    <button
+                      onClick={() => receive(po)}
+                      className="text-xs px-3 py-1.5 rounded-lg bg-[#EFF4FA] text-[#1E3A5F] font-medium hover:bg-[#E1EAF3]"
+                    >
+                      รับของแล้ว
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {showNew && (
+        <NewPOForm
+          items={visibleItems(items, user)}
+          notify={notify}
+          onClose={() => setShowNew(false)}
+          onSave={(data) => {
+            setPurchaseOrders((prev) => [
+              { id: uid(), status: "ordered", createdAt: Date.now(), requestedBy: user.name, deptId: user.id, deptName: user.name, ...data },
+              ...prev,
+            ]);
+            setShowNew(false);
+            notify("success", "สร้างรายการสั่งซื้อแล้ว");
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function NewPOForm({ items, onSave, onClose, notify }) {
+  const [itemId, setItemId] = useState(items[0]?.id || "");
+  const [qty, setQty] = useState("10");
+  const item = items.find((i) => i.id === itemId);
+  const qtyNum = toNum(qty, NaN);
+  const valid = item && Number.isFinite(qtyNum) && qtyNum > 0;
+
+  const handleSave = () => {
+    if (!item) { notify?.("error", "กรุณาเลือกสินค้า"); return; }
+    if (!Number.isFinite(qtyNum) || qtyNum <= 0) { notify?.("error", "จำนวนที่สั่งต้องมากกว่า 0"); return; }
+    onSave({ itemId: item.id, itemName: item.name, qty: qtyNum, unitPrice: item.price });
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={onClose}>
+      <div className="bg-white rounded-2xl p-6 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+        <h3 className="font-semibold text-slate-800 mb-4">สั่งซื้อสินค้า</h3>
+        {items.length === 0 ? (
+          <p className="text-sm text-slate-500 mb-4">ยังไม่มีสินค้าสำหรับแผนกนี้ กรุณาให้แอดมินเพิ่มสินค้าก่อน</p>
+        ) : (
+          <div className="space-y-3">
+            <label className="block">
+              <span className="text-xs text-slate-500 mb-1 block">สินค้า</span>
+              <select
+                value={itemId}
+                onChange={(e) => setItemId(e.target.value)}
+                className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#1E3A5F]/20"
+              >
+                {items.map((i) => <option key={i.id} value={i.id}>{i.name} ({i.sku})</option>)}
+              </select>
+            </label>
+            <Field label="จำนวนที่สั่ง" type="number" value={qty} onChange={setQty} />
+            {item && valid && <div className="text-xs text-slate-400">ราคา/หน่วย ฿{fmtMoney(item.price)} · รวม ฿{fmtMoney(item.price * qtyNum)}</div>}
+          </div>
+        )}
+        <div className="flex gap-2 mt-5">
+          <button onClick={onClose} className="flex-1 py-2.5 rounded-xl border border-slate-200 text-sm font-medium text-slate-600 hover:bg-slate-50">ยกเลิก</button>
+          <button
+            onClick={handleSave}
+            disabled={!valid}
+            className="flex-1 py-2.5 rounded-xl bg-[#1E3A5F] text-white text-sm font-medium hover:bg-[#16304F] disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            สั่งซื้อ
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------- App shell ----------
+function App() {
+  const [user, setUser] = useState(null);
+  const [tab, setTab] = useState("dashboard");
+  const [items, setItems] = useState(SEED_ITEMS);
+  const [requisitions, setRequisitions] = useState([]);
+  const [purchaseOrders, setPurchaseOrders] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+  const [toasts, setToasts] = useState([]);
+  const [confirmState, setConfirmState] = useState(null);
+
+  // Toast helper
+  const notify = useCallback((type, msg) => {
+    const id = uid();
+    setToasts((prev) => [...prev, { id, type, msg }]);
+    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 3000);
+  }, []);
+
+  // Confirm helper: opens a single shared modal
+  const confirm = useCallback((opts) => setConfirmState(opts), []);
+
+  useEffect(() => {
+    (async () => {
+      const data = await loadAll();
+      if (data.items) setItems(data.items);
+      if (data.requisitions) setRequisitions(data.requisitions);
+      if (data.purchaseOrders) setPurchaseOrders(data.purchaseOrders);
+      setLoaded(true);
+    })();
+  }, []);
+
+  // Consolidated, debounced persistence — one effect, one timer, saves only what changed
+  useEffect(() => {
+    if (!loaded) return;
+    const t = setTimeout(() => {
+      save("items", items);
+      save("requisitions", requisitions);
+      save("purchaseOrders", purchaseOrders);
+    }, 400);
+    return () => clearTimeout(t);
+  }, [items, requisitions, purchaseOrders, loaded]);
+
+  if (!user) return <Login onLogin={setUser} />;
+
+  const isAdmin = user.id === "admin";
+  // Admin manages the inventory; departments see ภาพรวม + เบิกของ + สั่งซื้อ
+  const nav = isAdmin
+    ? [
+        { id: "dashboard", label: "ภาพรวม", icon: LayoutDashboard },
+        { id: "inventory", label: "คลังสินค้า", icon: Package },
+        { id: "requisitions", label: "คำขอเบิก", icon: ClipboardList },
+        { id: "po", label: "สั่งซื้อ", icon: ShoppingCart },
+      ]
+    : [
+        { id: "dashboard", label: "ภาพรวม", icon: LayoutDashboard },
+        { id: "requisitions", label: "เบิกของ", icon: ClipboardList },
+        { id: "po", label: "สั่งซื้อ", icon: ShoppingCart },
+      ];
+
+  // If current tab isn't available for this role (e.g. department on "inventory"), fall back to dashboard
+  const activeTab = nav.some((n) => n.id === tab) ? tab : "dashboard";
+
+  return (
+    <div className="min-h-screen bg-[#F7F9FC] flex text-slate-800" style={{ fontFamily: "'Inter', system-ui, sans-serif" }}>
+      {/* Sidebar */}
+      <aside className="w-64 bg-[#0F1E33] text-white flex flex-col shrink-0 hidden md:flex">
+        <button
+          onClick={() => setUser(null)}
+          title="กลับหน้าเลือกแผนก"
+          className="px-5 py-5 flex items-center gap-2.5 border-b border-white/10 hover:bg-white/5 transition-colors text-left"
+        >
+          <div className="w-8 h-8 rounded-lg bg-[#1B3A5C] flex items-center justify-center shrink-0">
+            <Factory size={16} className="text-[#7FD4A8]" />
+          </div>
+          <div className="min-w-0">
+            <div className="text-[10px] text-slate-400 tracking-widest uppercase leading-none mb-1">Nachi Factory 4</div>
+            <div className="font-semibold text-sm tracking-tight leading-none">Store Engineering</div>
+          </div>
+        </button>
+        <nav className="flex-1 px-3 py-4 space-y-1">
+          {nav.map((n) => (
+            <button
+              key={n.id}
+              onClick={() => setTab(n.id)}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors ${
+                activeTab === n.id ? "bg-white/10 text-white" : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
+              }`}
+            >
+              <n.icon size={17} />
+              {n.label}
+            </button>
+          ))}
+        </nav>
+        <div className="p-3 border-t border-white/10">
+          <div className="flex items-center gap-2.5 px-2 py-2">
+            {(() => {
+              const Icon = DEPT_ICON[user.icon] || Package;
+              return (
+                <div
+                  className="w-8 h-8 rounded-lg flex items-center justify-center text-white shrink-0"
+                  style={{ background: user.color }}
+                >
+                  <Icon size={15} />
+                </div>
+              );
+            })()}
+            <div className="min-w-0">
+              <div className="text-xs font-medium truncate">{user.name}</div>
+              <div className="text-xs text-slate-400">{user.id === "admin" ? "ผู้ดูแลระบบ" : "แผนกผลิต"}</div>
+            </div>
+          </div>
+          <button
+            onClick={() => setUser(null)}
+            className="w-full flex items-center gap-2 px-3 py-2 mt-1 rounded-lg text-xs text-slate-400 hover:bg-white/5 hover:text-slate-200"
+          >
+            <LogOut size={13} /> ออกจากระบบ
+          </button>
+        </div>
+      </aside>
+
+      {/* Mobile top bar */}
+      <div className="md:hidden fixed bottom-0 left-0 right-0 bg-[#0F1E33] flex justify-around py-2 z-40">
+        {nav.map((n) => (
+          <button
+            key={n.id}
+            onClick={() => setTab(n.id)}
+            className={`flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-lg text-[10px] ${
+              activeTab === n.id ? "text-white" : "text-slate-500"
+            }`}
+          >
+            <n.icon size={18} />
+            {n.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Main */}
+      <main className="flex-1 p-5 md:p-8 pb-20 md:pb-8 max-w-6xl">
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setUser(null)}
+              title="กลับหน้าเลือกแผนก"
+              className="w-9 h-9 rounded-xl border border-slate-200 bg-white flex items-center justify-center text-slate-500 hover:bg-slate-50 hover:text-[#1E3A5F] transition-colors shrink-0"
+            >
+              <Home size={16} />
+            </button>
+            <div>
+              <h1 className="text-xl font-semibold text-slate-800">
+                {nav.find((n) => n.id === activeTab)?.label}
+              </h1>
+              <p className="text-sm text-slate-400 mt-0.5">
+                {activeTab === "dashboard" && "ภาพรวมคลังสินค้าและคำขอ"}
+                {activeTab === "inventory" && "รายการสินค้าคงคลังทั้งหมด"}
+                {activeTab === "requisitions" && (isAdmin ? "คำขอเบิกของและการอนุมัติ" : "เบิกของและติดตามสถานะ")}
+                {activeTab === "po" && "สั่งซื้อและสถานะการจัดส่ง"}
+              </p>
+            </div>
+          </div>
+          {(() => {
+            const Icon = DEPT_ICON[user.icon] || Package;
+            return (
+              <div
+                className="md:hidden w-9 h-9 rounded-lg flex items-center justify-center text-white shrink-0"
+                style={{ background: user.color }}
+              >
+                <Icon size={16} />
+              </div>
+            );
+          })()}
+        </div>
+
+        {activeTab === "dashboard" && (
+          <Dashboard items={items} requisitions={requisitions} purchaseOrders={purchaseOrders} user={user} />
+        )}
+        {activeTab === "inventory" && (
+          <Inventory items={items} setItems={setItems} user={user} notify={notify} confirm={confirm} />
+        )}
+        {activeTab === "requisitions" && (
+          <Requisitions
+            requisitions={requisitions}
+            setRequisitions={setRequisitions}
+            items={items}
+            setItems={setItems}
+            user={user}
+            purchaseOrders={purchaseOrders}
+            setPurchaseOrders={setPurchaseOrders}
+            notify={notify}
+            confirm={confirm}
+          />
+        )}
+        {activeTab === "po" && (
+          <PurchaseOrders purchaseOrders={purchaseOrders} setPurchaseOrders={setPurchaseOrders} items={items} setItems={setItems} user={user} notify={notify} confirm={confirm} />
+        )}
+      </main>
+
+      <ConfirmModal
+        open={!!confirmState}
+        title={confirmState?.title}
+        message={confirmState?.message}
+        confirmLabel={confirmState?.confirmLabel}
+        tone={confirmState?.tone}
+        onConfirm={confirmState?.onConfirm || (() => {})}
+        onClose={() => setConfirmState(null)}
+      />
+      <Toast toasts={toasts} />
+    </div>
+  );
+}
+
+    /* ================= END APP CODE ================= */
+
+    const root = ReactDOM.createRoot(document.getElementById("root"));
+    root.render(React.createElement(App));
+  </script>
+</body>
+</html>
