@@ -2,16 +2,20 @@
 <html lang="th">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>Nachi Factory 4 — Store Engineering</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.26.2/babel.min.js"></script>
   <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
   <style>
     body { font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif; margin: 0; }
     input[type=number]::-webkit-inner-spin-button,
     input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+    #qr-reader video { width: 100% !important; border-radius: 0 !important; object-fit: cover; }
+    #qr-reader { border: none !important; }
+    #qr-reader__dashboard_section_csr button { display: none; }
   </style>
 </head>
 <body>
@@ -42,7 +46,8 @@
       "Circle": "<circle cx=\"12\" cy=\"12\" r=\"10\" />",
       "ShieldCheck": "<path d=\"M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z\" /> <path d=\"m9 12 2 2 4-4\" />",
       "Factory": "<path d=\"M12 16h.01\" /> <path d=\"M16 16h.01\" /> <path d=\"M3 19a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8.5a.5.5 0 0 0-.769-.422l-4.462 2.844A.5.5 0 0 1 15 10.5v-2a.5.5 0 0 0-.769-.422L9.77 10.922A.5.5 0 0 1 9 10.5V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2z\" /> <path d=\"M8 16h.01\" />",
-      "Home": "<path d=\"M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8\" /> <path d=\"M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z\" />"
+      "Home": "<path d=\"M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8\" /> <path d=\"M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z\" />",
+      "ScanLine": "<path d=\"M3 7V5a2 2 0 0 1 2-2h2\" /> <path d=\"M17 3h2a2 2 0 0 1 2 2v2\" /> <path d=\"M21 17v2a2 2 0 0 1-2 2h-2\" /> <path d=\"M7 21H5a2 2 0 0 1-2-2v-2\" /> <path d=\"M7 12h10\" />"
     };
     function makeIcon(name) {
       return function IconComponent(props) {
@@ -81,6 +86,7 @@
     const ShieldCheck = makeIcon("ShieldCheck");
     const Factory = makeIcon("Factory");
     const Home = makeIcon("Home");
+    const ScanLine = makeIcon("ScanLine");
 
     /* ================= APP CODE ================= */
 // ---------- Constants ----------
@@ -386,6 +392,19 @@ function Dashboard({ items, requisitions, purchaseOrders, user }) {
     { label: isAdmin ? "สินค้าทั้งหมด" : "สินค้าของแผนก", value: myItems.length, icon: Package, color: "#065F46" },
   ];
 
+  // Per-department summary (admin only): items visible to a dept = central + that dept's own
+  const deptStats = DEPARTMENTS.map((d) => {
+    const deptItems = items.filter((i) => i.deptId === "central" || i.deptId === d.id);
+    return {
+      dept: d,
+      pending: requisitions.filter((r) => r.deptId === d.id && r.status === "pending").length,
+      lowStock: deptItems.filter((i) => i.stock <= i.minStock).length,
+      openPO: purchaseOrders.filter((p) => p.deptId === d.id && p.status === "ordered").length,
+      reqTotal: requisitions.filter((r) => r.deptId === d.id).length,
+    };
+  });
+  const maxReq = Math.max(1, ...deptStats.map((s) => s.reqTotal));
+
   return (
     <div className="space-y-6">
       {/* Department banner — shows which department you're viewing */}
@@ -421,6 +440,66 @@ function Dashboard({ items, requisitions, purchaseOrders, user }) {
           </div>
         ))}
       </div>
+
+      {/* Admin: per-department status cards with alert badges */}
+      {isAdmin && (
+        <div>
+          <h3 className="font-medium text-slate-800 text-sm mb-3">สถานะแต่ละแผนก</h3>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {deptStats.map(({ dept, pending, lowStock: low, openPO, reqTotal }) => {
+              const Icon = DEPT_ICON[dept.icon] || Package;
+              return (
+                <div key={dept.id} className="bg-white rounded-2xl border border-slate-100 p-5">
+                  <div className="flex items-center gap-3 mb-4">
+                    <div className="w-10 h-10 rounded-xl flex items-center justify-center text-white shrink-0" style={{ background: dept.color }}>
+                      <Icon size={19} strokeWidth={2.2} />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="font-semibold text-slate-800 text-sm truncate">{dept.name}</div>
+                      <div className="text-xs text-slate-400">คำขอสะสม {reqTotal} รายการ</div>
+                    </div>
+                  </div>
+
+                  {/* Alert badges */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-slate-500 flex items-center gap-1.5">
+                        <Clock size={13} className="text-amber-600" /> รออนุมัติ
+                      </span>
+                      <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${pending > 0 ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-400"}`}>
+                        {pending}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-slate-500 flex items-center gap-1.5">
+                        <TrendingDown size={13} className="text-red-500" /> ใกล้หมดคลัง
+                      </span>
+                      <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${low > 0 ? "bg-red-100 text-red-600" : "bg-slate-100 text-slate-400"}`}>
+                        {low}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-slate-500 flex items-center gap-1.5">
+                        <ShoppingCart size={13} className="text-violet-600" /> สั่งซื้อค้างรับ
+                      </span>
+                      <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${openPO > 0 ? "bg-violet-100 text-violet-700" : "bg-slate-100 text-slate-400"}`}>
+                        {openPO}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Mini activity bar */}
+                  <div className="mt-4">
+                    <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                      <div className="h-full rounded-full transition-all" style={{ width: `${(reqTotal / maxReq) * 100}%`, background: dept.color }} />
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {lowStock.length > 0 && (
         <div className="bg-white rounded-2xl border border-slate-100 overflow-hidden">
@@ -639,11 +718,11 @@ function Inventory({ items, setItems, user, notify, confirm }) {
                       <td className="px-5 py-3.5 text-slate-500">฿{fmtMoney(i.price)}</td>
                       <td className="px-5 py-3.5">
                         <div className="flex justify-end gap-2">
-                          <button onClick={() => setEditing(i)} className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600">
-                            <Edit2 size={14} />
+                          <button onClick={() => setEditing(i)} className="p-2 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600" aria-label="แก้ไขสินค้า">
+                            <Edit2 size={15} />
                           </button>
-                          <button onClick={() => handleDelete(i)} className="p-1.5 rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-500">
-                            <Trash2 size={14} />
+                          <button onClick={() => handleDelete(i)} className="p-2 rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-500" aria-label="ลบสินค้า">
+                            <Trash2 size={15} />
                           </button>
                         </div>
                       </td>
@@ -773,6 +852,7 @@ function Requisitions({ requisitions, setRequisitions, items, setItems, user, pu
   const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [pickedItem, setPickedItem] = useState(null);
+  const [scanning, setScanning] = useState(false);
   const isAdmin = user.id === "admin";
   const canApprove = isAdmin;
   const myItems = visibleItems(items, user);
@@ -780,6 +860,23 @@ function Requisitions({ requisitions, setRequisitions, items, setItems, user, pu
   const catalog = myItems.filter(
     (i) => i.name.toLowerCase().includes(search.toLowerCase()) || i.sku.toLowerCase().includes(search.toLowerCase())
   );
+
+  // Match a scanned code against SKU (or exact name) within visible items, then open the withdraw popup
+  const handleScan = (raw) => {
+    const code = (raw || "").trim();
+    setScanning(false);
+    if (!code) return;
+    const found = myItems.find(
+      (i) => i.sku.toLowerCase() === code.toLowerCase() || i.name.toLowerCase() === code.toLowerCase()
+    );
+    if (found) {
+      setPickedItem(found);
+      notify("success", `พบสินค้า: ${found.name}`);
+    } else {
+      setSearch(code);
+      notify("error", `ไม่พบสินค้ารหัส "${code}" — แสดงผลการค้นหาแทน`);
+    }
+  };
 
   const submitNew = ({ item, qty, note }) => {
     setRequisitions((prev) => [
@@ -883,16 +980,27 @@ function Requisitions({ requisitions, setRequisitions, items, setItems, user, pu
       {/* Item catalog with search — departments withdraw by clicking an item */}
       {!isAdmin && (
         <div className="bg-white rounded-2xl border border-slate-100 overflow-hidden">
-          <div className="px-5 py-4 border-b border-slate-100">
+          <div className="px-4 sm:px-5 py-4 border-b border-slate-100">
             <h3 className="font-medium text-slate-800 text-sm mb-3">เลือกสินค้าเพื่อเบิก</h3>
-            <div className="relative">
-              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-              <input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="ค้นหาชื่อสินค้า หรือ SKU"
-                className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#1E3A5F]/20 focus:border-[#1E3A5F]"
-              />
+            <div className="flex gap-2">
+              <div className="relative flex-1">
+                <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="ค้นหาชื่อสินค้า หรือ SKU"
+                  className="w-full pl-9 pr-3 py-3 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#1E3A5F]/20 focus:border-[#1E3A5F]"
+                />
+              </div>
+              <button
+                onClick={() => setScanning(true)}
+                title="สแกนบาร์โค้ด / QR"
+                aria-label="สแกนบาร์โค้ดหรือ QR โค้ด"
+                className="flex items-center gap-2 px-4 py-3 rounded-xl bg-[#1E3A5F] text-white text-sm font-medium hover:bg-[#16304F] transition-colors shrink-0"
+              >
+                <ScanLine size={18} />
+                <span className="hidden sm:inline">สแกน</span>
+              </button>
             </div>
           </div>
           {catalog.length === 0 ? (
@@ -976,17 +1084,19 @@ function Requisitions({ requisitions, setRequisitions, items, setItems, user, pu
                       <>
                         <button
                           onClick={() => approve(r)}
-                          className="p-2 rounded-lg bg-emerald-50 text-emerald-600 hover:bg-emerald-100"
+                          className="p-2.5 rounded-lg bg-emerald-50 text-emerald-600 hover:bg-emerald-100"
                           title="อนุมัติ"
+                          aria-label="อนุมัติคำขอ"
                         >
-                          <Check size={15} />
+                          <Check size={16} />
                         </button>
                         <button
                           onClick={() => reject(r)}
-                          className="p-2 rounded-lg bg-red-50 text-red-500 hover:bg-red-100"
+                          className="p-2.5 rounded-lg bg-red-50 text-red-500 hover:bg-red-100"
                           title="ปฏิเสธ"
+                          aria-label="ปฏิเสธคำขอ"
                         >
-                          <X size={15} />
+                          <X size={16} />
                         </button>
                       </>
                     ) : (
@@ -1011,6 +1121,115 @@ function Requisitions({ requisitions, setRequisitions, items, setItems, user, pu
       {pickedItem && (
         <RequisitionDetail item={pickedItem} notify={notify} onClose={() => setPickedItem(null)} onSubmit={submitNew} />
       )}
+
+      {scanning && (
+        <ScannerModal onDetected={handleScan} onClose={() => setScanning(false)} notify={notify} />
+      )}
+    </div>
+  );
+}
+
+// Camera barcode/QR scanner (uses html5-qrcode loaded via CDN). Works on HTTPS (e.g. GitHub Pages).
+function ScannerModal({ onDetected, onClose, notify }) {
+  const [status, setStatus] = useState("starting"); // starting | scanning | error
+  const [manual, setManual] = useState("");
+  const scannerRef = React.useRef(null);
+  const startedRef = React.useRef(false);
+  const handledRef = React.useRef(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (typeof window.Html5Qrcode === "undefined") {
+      setStatus("error");
+      notify?.("error", "โหลดตัวสแกนไม่สำเร็จ ตรวจสอบอินเทอร์เน็ต");
+      return;
+    }
+    const scanner = new window.Html5Qrcode("qr-reader", { verbose: false });
+    scannerRef.current = scanner;
+    const config = { fps: 10, qrbox: { width: 240, height: 150 }, aspectRatio: 1.3 };
+    scanner
+      .start(
+        { facingMode: "environment" },
+        config,
+        (decodedText) => {
+          if (cancelled || handledRef.current) return;
+          handledRef.current = true;
+          const s = scannerRef.current;
+          const finish = () => onDetected(decodedText);
+          if (s && startedRef.current) {
+            s.stop().then(() => { try { s.clear(); } catch (e) {} finish(); }).catch(finish);
+          } else finish();
+        },
+        () => {} // ignore per-frame decode misses
+      )
+      .then(() => { if (!cancelled) { startedRef.current = true; setStatus("scanning"); } })
+      .catch(() => { if (!cancelled) { setStatus("error"); notify?.("error", "เปิดกล้องไม่สำเร็จ ตรวจสอบการอนุญาตใช้กล้อง"); } });
+
+    return () => {
+      cancelled = true;
+      const s = scannerRef.current;
+      if (s && startedRef.current) {
+        s.stop().then(() => { try { s.clear(); } catch (e) {} }).catch(() => {});
+      }
+    };
+    // eslint-disable-next-line
+  }, []);
+
+  const submitManual = () => {
+    if (manual.trim()) onDetected(manual.trim());
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-0 sm:p-4 z-[60]" onClick={onClose}>
+      <div className="bg-white w-full h-full sm:h-auto sm:max-w-md sm:rounded-2xl overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
+          <h3 className="font-semibold text-slate-800 flex items-center gap-2"><ScanLine size={18} /> สแกนรหัสสินค้า</h3>
+          <button onClick={onClose} className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100" aria-label="ปิด">
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="flex-1 flex flex-col">
+          {/* Camera viewport */}
+          <div className="relative bg-black" style={{ minHeight: 260 }}>
+            <div id="qr-reader" className="w-full" />
+            {status === "starting" && (
+              <div className="absolute inset-0 flex items-center justify-center text-white text-sm">กำลังเปิดกล้อง...</div>
+            )}
+            {status === "error" && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center text-white text-sm px-6 text-center gap-1">
+                <AlertTriangle size={22} className="text-amber-400" />
+                <div>เปิดกล้องไม่สำเร็จ</div>
+                <div className="text-slate-300 text-xs">ตรวจสอบสิทธิ์กล้อง หรือใช้บนลิงก์ https (เช่น GitHub Pages) — พิมพ์รหัสด้านล่างแทนได้</div>
+              </div>
+            )}
+            {status === "scanning" && (
+              <div className="absolute bottom-3 left-0 right-0 text-center text-white/90 text-xs">เล็งกล้องไปที่บาร์โค้ด / QR ของสินค้า</div>
+            )}
+          </div>
+
+          {/* Manual fallback */}
+          <div className="p-5 space-y-2">
+            <span className="text-xs text-slate-500">หรือพิมพ์รหัสสินค้า (SKU) เอง</span>
+            <div className="flex gap-2">
+              <input
+                value={manual}
+                onChange={(e) => setManual(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && submitManual()}
+                placeholder="เช่น ST-001"
+                className="flex-1 px-3 py-3 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#1E3A5F]/20"
+              />
+              <button
+                onClick={submitManual}
+                disabled={!manual.trim()}
+                className="px-4 py-3 rounded-xl bg-[#1E3A5F] text-white text-sm font-medium hover:bg-[#16304F] disabled:opacity-40"
+              >
+                ค้นหา
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
