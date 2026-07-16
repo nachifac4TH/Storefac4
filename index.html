@@ -12,6 +12,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
   <style>
     body { font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif; margin: 0; }
     input[type=number]::-webkit-inner-spin-button,
@@ -200,28 +201,152 @@ function toNum(v, fallback = 0) {
   return Number.isFinite(n) && n >= 0 ? n : fallback;
 }
 
-// ---------- Storage helpers (localStorage-backed) ----------
+// ============================================================
+// Supabase config — วาง URL และ anon key ของโปรเจกต์คุณตรงนี้
+// (ดูวิธีในไฟล์ SUPABASE-SETUP.md) ถ้าเว้นว่างไว้ ระบบจะใช้ localStorage บนเครื่องแทน
+// ============================================================
+const SUPABASE_URL = "https://ljvjpuovmmwrsgpjyyyp.supabase.co";       // เช่น "https://abcd1234.supabase.co"
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxqdmpwdW92bW13cnNncGp5eXlwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQwMDgzNzUsImV4cCI6MjA5OTU4NDM3NX0.5tV7nJWA2CMXLtRNy23XB2al013yE2h2gDQLWEj6oGE";  // anon public key (ยาวๆ ขึ้นต้น eyJ...)
+
+const CLOUD =
+  typeof SUPABASE_URL === "string" && SUPABASE_URL.startsWith("http") &&
+  typeof SUPABASE_ANON_KEY === "string" && SUPABASE_ANON_KEY.length > 20 &&
+  typeof window !== "undefined" && window.supabase;
+const sb = CLOUD ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
+
+// ---------- Row <-> app object mappers ----------
+const itemFromRow = (r) => ({ id: r.id, sku: r.sku || "", name: r.name, unit: r.unit || "ชิ้น", stock: r.stock, minStock: r.min_stock, price: Number(r.price), category: r.category || "ทั่วไป", deptId: r.dept_id || "central" });
+const itemToRow = (i) => ({ sku: i.sku || "", name: i.name, unit: i.unit || "ชิ้น", stock: toNum(i.stock, 0), min_stock: toNum(i.minStock, 0), price: toNum(i.price, 0), category: i.category || "ทั่วไป", dept_id: i.deptId || "central" });
+const reqFromRow = (r) => ({ id: r.id, itemId: r.item_id, itemName: r.item_name, qty: r.qty, note: r.note || "", status: r.status, deptId: r.dept_id, deptName: r.dept_name, line: r.line || "", machine: r.machine || "", createdAt: new Date(r.created_at).getTime() });
+const poFromRow = (r) => ({ id: r.id, itemId: r.item_id, itemName: r.item_name, qty: r.qty, unitPrice: Number(r.unit_price), note: r.note || "", status: r.status, deptId: r.dept_id, deptName: r.dept_name, requestedBy: r.requested_by, line: r.line || "", machine: r.machine || "", imageUrls: r.image_urls || [], imageCount: (r.image_urls || []).length, createdAt: new Date(r.created_at).getTime() });
+
+// ---------- localStorage helpers (used when Supabase not configured) ----------
 const LS_PREFIX = "nachi_store_";
-async function loadAll() {
+async function localLoadAll() {
   const keys = ["items", "requisitions", "purchaseOrders"];
   const out = {};
   for (const k of keys) {
     try {
       const raw = localStorage.getItem(LS_PREFIX + k);
       out[k] = raw ? JSON.parse(raw) : null;
-    } catch {
-      out[k] = null;
-    }
+    } catch { out[k] = null; }
   }
   return out;
 }
 async function save(key, value) {
-  try {
-    localStorage.setItem(LS_PREFIX + key, JSON.stringify(value));
-  } catch (e) {
-    console.error("storage save failed", key, e);
-  }
+  if (CLOUD) return; // cloud is the source of truth; no local save needed
+  try { localStorage.setItem(LS_PREFIX + key, JSON.stringify(value)); }
+  catch (e) { console.error("storage save failed", key, e); }
 }
+
+// ---------- Unified data access (cloud or local) ----------
+const db = {
+  cloud: !!CLOUD,
+
+  async loadAll() {
+    if (!CLOUD) {
+      const { items, requisitions, purchaseOrders } = await localLoadAll();
+      return {
+        items: items || SEED_ITEMS,
+        requisitions: requisitions || [],
+        purchaseOrders: purchaseOrders || [],
+      };
+    }
+    const [i, r, p] = await Promise.all([
+      sb.from("items").select("*").order("created_at", { ascending: true }),
+      sb.from("requisitions").select("*").order("created_at", { ascending: false }),
+      sb.from("purchase_orders").select("*").order("created_at", { ascending: false }),
+    ]);
+    return {
+      items: (i.data || []).map(itemFromRow),
+      requisitions: (r.data || []).map(reqFromRow),
+      purchaseOrders: (p.data || []).map(poFromRow),
+    };
+  },
+
+  subscribe(onChange) {
+    if (!CLOUD) return () => {};
+    const ch = sb
+      .channel("store-changes")
+      .on("postgres_changes", { event: "*", schema: "public", table: "items" }, onChange)
+      .on("postgres_changes", { event: "*", schema: "public", table: "requisitions" }, onChange)
+      .on("postgres_changes", { event: "*", schema: "public", table: "purchase_orders" }, onChange)
+      .subscribe();
+    return () => { try { sb.removeChannel(ch); } catch (e) {} };
+  },
+
+  // Items
+  async addItem(item) {
+    if (!CLOUD) return null;
+    const { data, error } = await sb.from("items").insert(itemToRow(item)).select().single();
+    if (error) throw error;
+    return itemFromRow(data);
+  },
+  async addItems(items) {
+    if (!CLOUD) return null;
+    const { error } = await sb.from("items").insert(items.map(itemToRow));
+    if (error) throw error;
+  },
+  async updateItem(id, item) {
+    if (!CLOUD) return null;
+    const { error } = await sb.from("items").update(itemToRow(item)).eq("id", id);
+    if (error) throw error;
+  },
+  async deleteItem(id) {
+    if (!CLOUD) return null;
+    const { error } = await sb.from("items").delete().eq("id", id);
+    if (error) throw error;
+  },
+
+  // Requisition (atomic withdraw via RPC — concurrency-safe)
+  async withdraw({ itemId, qty, deptId, deptName, line, machine, note }) {
+    if (!CLOUD) return null;
+    const { data, error } = await sb.rpc("withdraw_item", {
+      p_item_id: itemId, p_qty: qty, p_dept_id: deptId, p_dept_name: deptName,
+      p_line: line, p_machine: machine, p_note: note || "",
+    });
+    if (error) throw error;
+    return data ? reqFromRow(Array.isArray(data) ? data[0] : data) : null;
+  },
+
+  // Purchase orders
+  async uploadImages(files) {
+    if (!CLOUD || !files || files.length === 0) return [];
+    const urls = [];
+    for (const f of files.slice(0, 3)) {
+      const path = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${f.name}`.replace(/[^\w.\-]/g, "_");
+      const { error } = await sb.storage.from("po-images").upload(path, f, { upsert: false });
+      if (!error) {
+        const { data } = sb.storage.from("po-images").getPublicUrl(path);
+        if (data && data.publicUrl) urls.push(data.publicUrl);
+      }
+    }
+    return urls;
+  },
+  async createPO(po) {
+    if (!CLOUD) return null;
+    const row = {
+      item_id: po.itemId, item_name: po.itemName, qty: po.qty, unit_price: po.unitPrice,
+      note: po.note || "", status: "pending_approval", dept_id: po.deptId, dept_name: po.deptName,
+      requested_by: po.requestedBy, line: po.line || "", machine: po.machine || "",
+      image_urls: po.imageUrls || [],
+    };
+    const { data, error } = await sb.from("purchase_orders").insert(row).select().single();
+    if (error) throw error;
+    return poFromRow(data);
+  },
+  async updatePOStatus(id, status, extra = {}) {
+    if (!CLOUD) return null;
+    const patch = { status, ...extra };
+    const { error } = await sb.from("purchase_orders").update(patch).eq("id", id);
+    if (error) throw error;
+  },
+  async receivePO(id) {
+    if (!CLOUD) return null;
+    const { error } = await sb.rpc("receive_po", { p_po_id: id });
+    if (error) throw error;
+  },
+};
 
 // ---------- Small UI atoms ----------
 function Badge({ status, map }) {
@@ -510,7 +635,7 @@ function DeptCard({ dept, iconKind, onClick, glow, isAdmin }) {
       </div>
       {isAdmin && (
         <div className="relative mt-3 flex items-center gap-1.5 text-[11px] text-white/70">
-          <ShieldCheck size={12} /> ต้องยืนยันตัวตน (รหัส / สแกนหน้า)
+          <ShieldCheck size={12} /> ต้องยืนยันตัวตน (รหัส / Face ID)
         </div>
       )}
     </button>
@@ -609,7 +734,7 @@ function AdminAuthModal({ onSuccess, onClose }) {
             </button>
             <button onClick={() => setMode("face")} className="w-full flex items-center gap-3 p-3.5 rounded-xl bg-white/5 border border-white/10 text-white hover:bg-white/10 transition-colors">
               <ScanLine size={18} className="text-emerald-400" />
-              <div className="text-left"><div className="text-sm font-medium">สแกนใบหน้า</div><div className="text-xs text-slate-400">เหมาะกับมือถือ (กล้องหน้า)</div></div>
+              <div className="text-left"><div className="text-sm font-medium">Face ID / ลายนิ้วมือ</div><div className="text-xs text-slate-400">ปลดล็อกด้วยไบโอเมตริกของเครื่อง</div></div>
             </button>
           </div>
         )}
@@ -644,71 +769,113 @@ function AdminAuthModal({ onSuccess, onClose }) {
   );
 }
 
-// Front-camera face verification (opens camera, capture to confirm; does not store/recognize faces)
+// Device biometric unlock via WebAuthn (Face ID / fingerprint) — like banking apps.
+// The device's secure enclave handles the face/fingerprint; we never see or store any face data.
+const WEBAUTHN_KEY = "nachi_admin_cred"; // stores the registered credential id (base64) on this device
+
+function b64urlToBuf(s) {
+  s = s.replace(/-/g, "+").replace(/_/g, "/");
+  const pad = s.length % 4 ? "=".repeat(4 - (s.length % 4)) : "";
+  const bin = atob(s + pad);
+  const buf = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+  return buf.buffer;
+}
+function bufToB64url(buf) {
+  const bytes = new Uint8Array(buf);
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
 function FaceScan({ onVerified, onBack }) {
-  const [status, setStatus] = useState("starting"); // starting | ready | error
-  const [captured, setCaptured] = useState(false);
-  const videoRef = React.useRef(null);
-  const streamRef = React.useRef(null);
+  const [supported, setSupported] = useState(true);
+  const [registered, setRegistered] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
 
   useEffect(() => {
-    let cancelled = false;
-    const start = async () => {
-      try {
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { setStatus("error"); return; }
-        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false });
-        if (cancelled) { stream.getTracks().forEach((t) => t.stop()); return; }
-        streamRef.current = stream;
-        if (videoRef.current) { videoRef.current.srcObject = stream; await videoRef.current.play().catch(() => {}); }
-        setStatus("ready");
-      } catch (e) {
-        setStatus("error");
-      }
-    };
-    start();
-    return () => { cancelled = true; if (streamRef.current) streamRef.current.getTracks().forEach((t) => t.stop()); };
+    const ok = typeof window !== "undefined" && window.PublicKeyCredential && navigator.credentials;
+    setSupported(!!ok);
+    try { setRegistered(!!localStorage.getItem(WEBAUTHN_KEY)); } catch (e) {}
   }, []);
 
-  const capture = () => {
-    setCaptured(true);
-    if (streamRef.current) streamRef.current.getTracks().forEach((t) => t.stop());
-    setTimeout(() => onVerified(), 900);
+  const randomBytes = (n) => {
+    const a = new Uint8Array(n);
+    (window.crypto || window.msCrypto).getRandomValues(a);
+    return a;
+  };
+
+  // First-time setup on this device: create a passkey bound to Face ID / fingerprint
+  const register = async () => {
+    setBusy(true); setMsg("");
+    try {
+      const cred = await navigator.credentials.create({
+        publicKey: {
+          challenge: randomBytes(32),
+          rp: { name: "NACHI Store Engineering" },
+          user: { id: randomBytes(16), name: "admin@nachi", displayName: "Admin" },
+          pubKeyCredParams: [{ type: "public-key", alg: -7 }, { type: "public-key", alg: -257 }],
+          authenticatorSelection: { authenticatorAttachment: "platform", userVerification: "required" },
+          timeout: 60000,
+        },
+      });
+      const id = bufToB64url(cred.rawId);
+      localStorage.setItem(WEBAUTHN_KEY, id);
+      setRegistered(true);
+      setMsg("ตั้งค่าสำเร็จ — แตะปุ่มด้านล่างเพื่อเข้าสู่ระบบ");
+    } catch (e) {
+      setMsg("ตั้งค่าไม่สำเร็จ หรือถูกยกเลิก");
+    } finally { setBusy(false); }
+  };
+
+  // Unlock: prompt the device biometric (Face ID / fingerprint)
+  const unlock = async () => {
+    setBusy(true); setMsg("");
+    try {
+      const id = localStorage.getItem(WEBAUTHN_KEY);
+      await navigator.credentials.get({
+        publicKey: {
+          challenge: randomBytes(32),
+          allowCredentials: id ? [{ type: "public-key", id: b64urlToBuf(id) }] : [],
+          userVerification: "required",
+          timeout: 60000,
+        },
+      });
+      onVerified();
+    } catch (e) {
+      setMsg("ยืนยันตัวตนไม่สำเร็จ หรือถูกยกเลิก");
+    } finally { setBusy(false); }
   };
 
   return (
-    <div className="p-5 space-y-3">
-      <div className="relative rounded-2xl overflow-hidden bg-black aspect-[3/4] max-h-72 mx-auto flex items-center justify-center">
-        {status !== "error" && <video ref={videoRef} playsInline muted className="w-full h-full object-cover" style={{ transform: "scaleX(-1)" }} />}
-        {/* Face guide ring */}
-        {status === "ready" && !captured && (
-          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-            <div className="w-40 h-52 rounded-[50%] border-2 border-[#7FD4A8]/70" style={{ boxShadow: "0 0 0 9999px rgba(0,0,0,0.35)" }} />
-          </div>
+    <div className="p-5 space-y-4">
+      <div className="flex flex-col items-center text-center gap-3 py-2">
+        <div className="w-20 h-20 rounded-3xl flex items-center justify-center" style={{ background: "linear-gradient(145deg, rgba(16,185,129,0.25), rgba(255,255,255,0.05))", boxShadow: "inset 0 1px 1px rgba(255,255,255,0.25)" }}>
+          <ScanLine size={40} className="text-emerald-400" />
+        </div>
+        {!supported ? (
+          <p className="text-slate-300 text-sm">อุปกรณ์/เบราว์เซอร์นี้ไม่รองรับ Face ID บนเว็บ<br /><span className="text-slate-400 text-xs">กรุณาใช้รหัสผ่านแทน</span></p>
+        ) : registered ? (
+          <p className="text-slate-300 text-sm">แตะเพื่อปลดล็อกด้วย Face ID / ลายนิ้วมือของเครื่อง</p>
+        ) : (
+          <p className="text-slate-300 text-sm">ตั้งค่าครั้งแรกบนอุปกรณ์นี้<br /><span className="text-slate-400 text-xs">ระบบจะใช้ Face ID / ลายนิ้วมือของเครื่อง (ไม่เก็บรูปใบหน้า)</span></p>
         )}
-        {status === "starting" && <div className="absolute inset-0 flex items-center justify-center text-white text-sm">กำลังเปิดกล้องหน้า...</div>}
-        {status === "error" && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-6 gap-1">
-            <AlertTriangle size={22} className="text-amber-400" />
-            <div className="text-white text-sm">เปิดกล้องไม่สำเร็จ</div>
-            <div className="text-slate-400 text-xs">ตรวจสอบสิทธิ์กล้อง หรือใช้บนลิงก์ https — ใช้รหัสผ่านแทนได้</div>
-          </div>
-        )}
-        {captured && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center bg-emerald-600/90 gap-2 text-white">
-            <Check size={40} /> <div className="text-sm font-medium">ยืนยันใบหน้าสำเร็จ</div>
-          </div>
-        )}
+        {msg && <div className="text-xs text-amber-400">{msg}</div>}
       </div>
-      {status === "ready" && !captured && <p className="text-center text-slate-400 text-xs">จัดใบหน้าให้อยู่ในกรอบ แล้วกดยืนยัน</p>}
-      <div className="flex gap-2 pt-1">
-        <button onClick={onBack} className="flex-1 py-2.5 rounded-xl border border-white/10 text-sm font-medium text-slate-300 hover:bg-white/5">ย้อนกลับ</button>
-        <button
-          onClick={capture}
-          disabled={status !== "ready" || captured}
-          className="flex-1 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          ยืนยันใบหน้า
-        </button>
+
+      <div className="space-y-2">
+        {supported && !registered && (
+          <button onClick={register} disabled={busy} className="w-full py-3 rounded-xl bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-500 disabled:opacity-50">
+            {busy ? "กำลังตั้งค่า..." : "ตั้งค่า Face ID / ลายนิ้วมือ"}
+          </button>
+        )}
+        {supported && registered && (
+          <button onClick={unlock} disabled={busy} className="w-full py-3 rounded-xl bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-500 disabled:opacity-50 flex items-center justify-center gap-2">
+            <ScanLine size={18} /> {busy ? "กำลังยืนยัน..." : "ปลดล็อกด้วย Face ID"}
+          </button>
+        )}
+        <button onClick={onBack} className="w-full py-2.5 rounded-xl border border-white/10 text-sm font-medium text-slate-300 hover:bg-white/5">ย้อนกลับ (ใช้รหัสผ่าน)</button>
       </div>
     </div>
   );
@@ -1112,6 +1279,7 @@ function Inventory({ items, setItems, user, notify, confirm }) {
       confirmLabel: "ลบสินค้า",
       tone: "danger",
       onConfirm: () => {
+        if (db.cloud) { db.deleteItem(item.id).then(() => notify("success", "ลบสินค้าแล้ว")).catch(() => notify("error", "ลบไม่สำเร็จ")); return; }
         setItems((prev) => prev.filter((i) => i.id !== item.id));
         notify("success", "ลบสินค้าแล้ว");
       },
@@ -1148,8 +1316,12 @@ function Inventory({ items, setItems, user, notify, confirm }) {
             })(),
           };
         });
-        setItems((prev) => [...prev, ...newItems]);
-        notify("success", `นำเข้าสินค้า ${newItems.length} รายการสำเร็จ`);
+        if (db.cloud) {
+          db.addItems(newItems).then(() => notify("success", `นำเข้าสินค้า ${newItems.length} รายการสำเร็จ`)).catch(() => notify("error", "นำเข้าไม่สำเร็จ"));
+        } else {
+          setItems((prev) => [...prev, ...newItems]);
+          notify("success", `นำเข้าสินค้า ${newItems.length} รายการสำเร็จ`);
+        }
       } catch (err) {
         notify("error", "อ่านไฟล์ CSV ไม่สำเร็จ ตรวจสอบรูปแบบไฟล์");
       }
@@ -1250,6 +1422,13 @@ function Inventory({ items, setItems, user, notify, confirm }) {
           notify={notify}
           onClose={() => { setShowAdd(false); setEditing(null); }}
           onSave={(data) => {
+            if (db.cloud) {
+              const op = editing ? db.updateItem(editing.id, data) : db.addItem(data);
+              op.then(() => notify("success", editing ? "บันทึกการแก้ไขแล้ว" : "เพิ่มสินค้าใหม่แล้ว")).catch(() => notify("error", "บันทึกไม่สำเร็จ"));
+              setShowAdd(false);
+              setEditing(null);
+              return;
+            }
             if (editing) {
               setItems((prev) => prev.map((i) => (i.id === editing.id ? { ...i, ...data } : i)));
               notify("success", "บันทึกการแก้ไขแล้ว");
@@ -1394,6 +1573,19 @@ function Requisitions({ requisitions, setRequisitions, items, setItems, user, pu
       notify("error", `สต็อกไม่พอ: คงเหลือ ${current ? current.stock : 0} ${item.unit}`);
       return;
     }
+    if (db.cloud) {
+      // Atomic server-side decrement (handles concurrent withdrawals during shift change)
+      db.withdraw({ itemId: item.id, qty, deptId, deptName, line, machine, note })
+        .then(() => notify("success", `เบิก ${item.name} × ${qty} — ตัดสต็อกแล้ว`))
+        .catch((e) => {
+          const msg = String(e && e.message || "");
+          if (msg.includes("INSUFFICIENT_STOCK")) notify("error", "สต็อกไม่พอ (มีคนเบิกตัดไปพร้อมกัน) กรุณาลองใหม่");
+          else notify("error", "บันทึกการเบิกไม่สำเร็จ");
+        });
+      setPickedItem(null);
+      return;
+    }
+    // Local mode
     setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, stock: Math.max(0, i.stock - qty) } : i)));
     setRequisitions((prev) => [
       { id: uid(), itemId: item.id, itemName: item.name, qty, note, status: "fulfilled", deptId, deptName, line, machine, createdAt: Date.now() },
@@ -1845,6 +2037,7 @@ function PurchaseOrders({ purchaseOrders, setPurchaseOrders, items, setItems, us
       message: `อนุมัติ "${po.itemName}" × ${po.qty} — จะเข้าสู่ขั้นตอนการสั่งซื้อ`,
       confirmLabel: "อนุมัติ",
       onConfirm: () => {
+        if (db.cloud) { db.updatePOStatus(po.id, "awaiting_order", { approved_at: new Date().toISOString() }).then(() => notify("success", "อนุมัติแล้ว")).catch(() => notify("error", "อนุมัติไม่สำเร็จ")); return; }
         setPurchaseOrders((prev) => prev.map((p) => (p.id === po.id && p.status === "pending_approval" ? { ...p, status: "awaiting_order", approvedAt: Date.now() } : p)));
         notify("success", "อนุมัติแล้ว");
       },
@@ -1858,6 +2051,7 @@ function PurchaseOrders({ purchaseOrders, setPurchaseOrders, items, setItems, us
       confirmLabel: "ปฏิเสธ",
       tone: "danger",
       onConfirm: () => {
+        if (db.cloud) { db.updatePOStatus(po.id, "rejected").then(() => notify("success", "ปฏิเสธแล้ว")).catch(() => notify("error", "ทำรายการไม่สำเร็จ")); return; }
         setPurchaseOrders((prev) => prev.map((p) => (p.id === po.id && p.status === "pending_approval" ? { ...p, status: "rejected", decidedAt: Date.now() } : p)));
         notify("success", "ปฏิเสธแล้ว");
       },
@@ -1865,6 +2059,7 @@ function PurchaseOrders({ purchaseOrders, setPurchaseOrders, items, setItems, us
   };
 
   const changeStatus = (po, status) => {
+    if (db.cloud) { db.updatePOStatus(po.id, status).catch(() => notify("error", "อัปเดตสถานะไม่สำเร็จ")); return; }
     setPurchaseOrders((prev) => prev.map((p) => (p.id === po.id ? { ...p, status } : p)));
   };
 
@@ -1874,6 +2069,7 @@ function PurchaseOrders({ purchaseOrders, setPurchaseOrders, items, setItems, us
       message: `รับ "${po.itemName}" จำนวน ${po.qty} เข้าสต็อกใช่หรือไม่`,
       confirmLabel: "รับของ",
       onConfirm: () => {
+        if (db.cloud) { db.receivePO(po.id).then(() => notify("success", "รับของเข้าคลังแล้ว")).catch(() => notify("error", "รับของไม่สำเร็จ")); return; }
         let done = false;
         setPurchaseOrders((prev) =>
           prev.map((p) => {
@@ -1985,9 +2181,19 @@ function PurchaseOrders({ purchaseOrders, setPurchaseOrders, items, setItems, us
           user={user}
           notify={notify}
           onClose={() => setShowNew(false)}
-          onSave={(data) => {
+          onSave={async (data) => {
+            const { files, imageCount, ...rest } = data;
+            if (db.cloud) {
+              setShowNew(false);
+              try {
+                const imageUrls = await db.uploadImages(files || []);
+                await db.createPO({ ...rest, requestedBy: user.name, imageUrls });
+                notify("success", "ส่งคำขอสั่งซื้อแล้ว รออนุมัติ");
+              } catch (e) { notify("error", "ส่งคำขอไม่สำเร็จ"); }
+              return;
+            }
             setPurchaseOrders((prev) => [
-              { id: uid(), status: "pending_approval", createdAt: Date.now(), requestedBy: user.name, ...data },
+              { id: uid(), status: "pending_approval", createdAt: Date.now(), requestedBy: user.name, imageCount, ...rest },
               ...prev,
             ]);
             setShowNew(false);
@@ -2020,7 +2226,7 @@ function NewPOForm({ items, user, onSave, onClose, notify }) {
 
   const onPickImages = (e) => {
     const files = Array.from(e.target.files || []).slice(0, 3 - images.length);
-    const next = files.map((f) => ({ name: f.name, url: URL.createObjectURL(f) }));
+    const next = files.map((f) => ({ name: f.name, url: URL.createObjectURL(f), file: f }));
     setImages((prev) => [...prev, ...next].slice(0, 3));
     e.target.value = "";
   };
@@ -2032,7 +2238,9 @@ function NewPOForm({ items, user, onSave, onClose, notify }) {
     if (!line || !machine) { notify?.("error", "กรุณาเลือก Line และเครื่องจักร"); return; }
     onSave({
       itemId: item.id, itemName: item.name, qty: qtyNum, unitPrice: item.price,
-      deptId, deptName, line, machine, note: note.trim(), imageCount: images.length,
+      deptId, deptName, line, machine, note: note.trim(),
+      imageCount: images.length,
+      files: images.map((im) => im.file).filter(Boolean),
     });
   };
 
@@ -2142,19 +2350,25 @@ function App() {
   // Confirm helper: opens a single shared modal
   const confirm = useCallback((opts) => setConfirmState(opts), []);
 
-  useEffect(() => {
-    (async () => {
-      const data = await loadAll();
-      if (data.items) setItems(data.items);
-      if (data.requisitions) setRequisitions(data.requisitions);
-      if (data.purchaseOrders) setPurchaseOrders(data.purchaseOrders);
-      setLoaded(true);
-    })();
+  const reload = useCallback(async () => {
+    const data = await db.loadAll();
+    setItems(data.items);
+    setRequisitions(data.requisitions);
+    setPurchaseOrders(data.purchaseOrders);
+    setLoaded(true);
   }, []);
 
-  // Consolidated, debounced persistence — one effect, one timer, saves only what changed
   useEffect(() => {
-    if (!loaded) return;
+    reload();
+    // Live sync across devices (cloud mode only). Debounce bursts of changes.
+    let t;
+    const unsub = db.subscribe(() => { clearTimeout(t); t = setTimeout(() => reload(), 250); });
+    return () => { clearTimeout(t); unsub(); };
+  }, [reload]);
+
+  // Debounced local persistence (only when Supabase is NOT configured)
+  useEffect(() => {
+    if (!loaded || db.cloud) return;
     const t = setTimeout(() => {
       save("items", items);
       save("requisitions", requisitions);
