@@ -9,6 +9,9 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.26.2/babel.min.js"></script>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
   <style>
     body { font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif; margin: 0; }
     input[type=number]::-webkit-inner-spin-button,
@@ -131,8 +134,40 @@ const STATUS_META = {
   received: { label: "รับของแล้ว", color: "#065F46", bg: "#ECFDF5" },
 };
 
+// Purchase-order lifecycle statuses
+const PO_STATUS = {
+  pending_approval: { label: "รอการอนุมัติ", color: "#B45309", bg: "#FEF3E2" },
+  awaiting_order: { label: "รอการสั่งซื้อ", color: "#1E3A5F", bg: "#EFF4FA" },
+  awaiting_supplier: { label: "รอของจาก Supplier", color: "#5B21B6", bg: "#F5F3FF" },
+  awaiting_import: { label: "รอของจากต่างประเทศ", color: "#9333EA", bg: "#FAF5FF" },
+  rejected: { label: "ปฏิเสธ", color: "#991B1B", bg: "#FEF2F2" },
+  received: { label: "รับของแล้ว", color: "#065F46", bg: "#ECFDF5" },
+};
+// Statuses an admin can switch between via dropdown after approval
+const PO_WORKFLOW = ["awaiting_order", "awaiting_supplier", "awaiting_import"];
+
+// Line & machine options per production department
+const LINES_BY_DEPT = {
+  first_grinding: ["OD401", "OD402", "OD403", "OD404", "SF401", "SF402", "SF403", "SF404"],
+  grinding: (() => {
+    const arr = [];
+    for (let n = 401; n <= 441; n++) { arr.push("IG" + n); arr.push("OG" + n); }
+    return arr;
+  })(),
+  assembly: Array.from({ length: 19 }, (_, i) => "A" + (401 + i)),
+};
+const MACHINES_BY_DEPT = {
+  first_grinding: ["SF", "OD", "อื่นๆ"],
+  grinding: ["Lift", "Raceway", "Bore", "Auto check", "Honing", "Pump coolant", "อื่นๆ"],
+  assembly: ["Part feeder", "Lift", "Matching", "Caulking", "Laser mark", "Washing", "De oil", "GSP", "visual", "อื่นๆ"],
+};
+const linesFor = (deptId) => LINES_BY_DEPT[deptId] || [];
+const machinesFor = (deptId) => MACHINES_BY_DEPT[deptId] || [];
+
 const uid = () => Math.random().toString(36).slice(2, 10);
 const fmtDate = (d) => new Date(d).toLocaleDateString("th-TH", { day: "2-digit", month: "short", year: "2-digit" });
+const fmtDateTime = (d) =>
+  new Date(d).toLocaleString("th-TH", { day: "2-digit", month: "short", year: "2-digit", hour: "2-digit", minute: "2-digit" });
 const fmtMoney = (n) => n.toLocaleString("th-TH", { minimumFractionDigits: 0 });
 
 // Parse a single CSV line respecting quoted fields (handles commas & escaped quotes inside quotes)
@@ -188,8 +223,9 @@ async function save(key, value) {
 }
 
 // ---------- Small UI atoms ----------
-function Badge({ status }) {
-  const m = STATUS_META[status] || { label: status, color: "#475569", bg: "#F1F5F9" };
+function Badge({ status, map }) {
+  const table = map || STATUS_META;
+  const m = table[status] || STATUS_META[status] || PO_STATUS[status] || { label: status, color: "#475569", bg: "#F1F5F9" };
   return (
     <span
       style={{ color: m.color, background: m.bg }}
@@ -377,29 +413,230 @@ function Login({ onLogin }) {
 }
 
 // ---------- Dashboard ----------
-function Dashboard({ items, requisitions, purchaseOrders, user }) {
+// Admin per-department card: badges that expand to show which items/requests/POs are involved
+function DeptStatusCard({ stat, maxReq }) {
+  const { dept, pending, pendingItems, lowStock: low, lowItems, openPO, openPOItems, reqTotal } = stat;
+  const [open, setOpen] = useState(null); // "pending" | "low" | "po" | null
+  const Icon = DEPT_ICON[dept.icon] || Package;
+  const toggle = (key) => setOpen((cur) => (cur === key ? null : key));
+
+  const Row = ({ rowKey, icon: RowIcon, iconClass, label, count, badgeClass, accentBorder }) => (
+    <>
+      <button
+        onClick={() => count > 0 && toggle(rowKey)}
+        disabled={count === 0}
+        className={`w-full flex items-center justify-between ${count > 0 ? "cursor-pointer hover:bg-slate-50 -mx-1 px-1 rounded-lg" : "cursor-default"}`}
+      >
+        <span className="text-xs text-slate-500 flex items-center gap-1.5">
+          <RowIcon size={13} className={iconClass} /> {label}
+          {count > 0 && <ChevronRight size={12} className={`text-slate-400 transition-transform ${open === rowKey ? "rotate-90" : ""}`} />}
+        </span>
+        <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${count > 0 ? badgeClass : "bg-slate-100 text-slate-400"}`}>
+          {count}
+        </span>
+      </button>
+      {open === rowKey && count > 0 && (
+        <div className={`ml-1 pl-3 border-l-2 ${accentBorder} space-y-1.5 py-1`}>
+          {rowKey === "low" &&
+            lowItems.map((i) => (
+              <div key={i.id} className="flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="text-xs font-medium text-slate-700 truncate">{i.name}</div>
+                  <div className="text-[10px] text-slate-400">
+                    {i.sku}
+                    <span className="ml-1 px-1 py-0.5 rounded" style={{ color: itemDeptColor(i.deptId), background: `${itemDeptColor(i.deptId)}12` }}>
+                      {itemDeptName(i.deptId)}
+                    </span>
+                  </div>
+                </div>
+                <div className="text-right shrink-0">
+                  <span className="text-xs font-semibold text-amber-700">{i.stock}</span>
+                  <span className="text-[10px] text-slate-400"> / ขั้นต่ำ {i.minStock} {i.unit}</span>
+                </div>
+              </div>
+            ))}
+          {rowKey === "pending" &&
+            pendingItems.map((r) => (
+              <div key={r.id} className="flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="text-xs font-medium text-slate-700 truncate">{r.itemName}</div>
+                  <div className="text-[10px] text-slate-400">{fmtDate(r.createdAt)}{r.note ? ` · ${r.note}` : ""}</div>
+                </div>
+                <span className="text-xs font-semibold text-slate-600 shrink-0">× {r.qty}</span>
+              </div>
+            ))}
+          {rowKey === "po" &&
+            openPOItems.map((p) => (
+              <div key={p.id} className="flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="text-xs font-medium text-slate-700 truncate">{p.itemName}</div>
+                  <div className="text-[10px] text-slate-400">฿{fmtMoney(p.qty * p.unitPrice)} · {fmtDate(p.createdAt)}</div>
+                </div>
+                <span className="text-xs font-semibold text-slate-600 shrink-0">× {p.qty}</span>
+              </div>
+            ))}
+        </div>
+      )}
+    </>
+  );
+
+  return (
+    <div className="bg-white rounded-2xl border border-slate-100 p-5">
+      <div className="flex items-center gap-3 mb-4">
+        <div className="w-10 h-10 rounded-xl flex items-center justify-center text-white shrink-0" style={{ background: dept.color }}>
+          <Icon size={19} strokeWidth={2.2} />
+        </div>
+        <div className="min-w-0">
+          <div className="font-semibold text-slate-800 text-sm truncate">{dept.name}</div>
+          <div className="text-xs text-slate-400">คำขอสะสม {reqTotal} รายการ</div>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <Row rowKey="pending" icon={Clock} iconClass="text-amber-600" label="รออนุมัติ" count={pending} badgeClass="bg-amber-100 text-amber-700" accentBorder="border-amber-100" />
+        <Row rowKey="low" icon={TrendingDown} iconClass="text-red-500" label="ใกล้หมดคลัง" count={low} badgeClass="bg-red-100 text-red-600" accentBorder="border-red-100" />
+        <Row rowKey="po" icon={ShoppingCart} iconClass="text-violet-600" label="สั่งซื้อค้างรับ" count={openPO} badgeClass="bg-violet-100 text-violet-700" accentBorder="border-violet-100" />
+      </div>
+
+      <div className="mt-4">
+        <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
+          <div className="h-full rounded-full transition-all" style={{ width: `${(reqTotal / maxReq) * 100}%`, background: dept.color }} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------- Export (Excel + PDF) ----------
+function exportExcel({ items, requisitions, purchaseOrders, notify }) {
+  try {
+    if (typeof window.XLSX === "undefined") { notify?.("error", "โหลดตัวช่วย Excel ไม่สำเร็จ ตรวจสอบอินเทอร์เน็ต"); return; }
+    const XLSX = window.XLSX;
+    const wb = XLSX.utils.book_new();
+
+    const invRows = items.map((i) => ({
+      SKU: i.sku, ชื่อสินค้า: i.name, แผนก: itemDeptName(i.deptId), หมวดหมู่: i.category,
+      คงเหลือ: i.stock, ขั้นต่ำ: i.minStock, หน่วย: i.unit, "ราคา/หน่วย": i.price,
+      สถานะ: i.stock <= i.minStock ? "ใกล้หมด" : "ปกติ",
+    }));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(invRows), "คลังสินค้า");
+
+    const reqRows = requisitions.map((r) => ({
+      วันเวลา: fmtDateTime(r.createdAt), สินค้า: r.itemName, จำนวน: r.qty,
+      แผนก: r.deptName, Line: r.line || "", เครื่องจักร: r.machine || "", หมายเหตุ: r.note || "",
+    }));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(reqRows.length ? reqRows : [{ ว่าง: "ไม่มีข้อมูล" }]), "ประวัติการเบิก");
+
+    const poRows = purchaseOrders.map((p) => ({
+      วันเวลา: fmtDateTime(p.createdAt), สินค้า: p.itemName, จำนวน: p.qty,
+      มูลค่า: p.qty * p.unitPrice, แผนก: p.deptName || p.requestedBy, Line: p.line || "",
+      เครื่องจักร: p.machine || "", สถานะ: (PO_STATUS[p.status] || {}).label || p.status,
+    }));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(poRows.length ? poRows : [{ ว่าง: "ไม่มีข้อมูล" }]), "สั่งซื้อ");
+
+    const stamp = new Date().toISOString().slice(0, 10);
+    XLSX.writeFile(wb, `Nachi-Store-${stamp}.xlsx`);
+    notify?.("success", "ส่งออก Excel แล้ว");
+  } catch (e) {
+    notify?.("error", "ส่งออก Excel ไม่สำเร็จ");
+  }
+}
+
+async function exportPDF(elementId, notify) {
+  try {
+    if (typeof window.html2canvas === "undefined" || typeof window.jspdf === "undefined") {
+      notify?.("error", "โหลดตัวช่วย PDF ไม่สำเร็จ ตรวจสอบอินเทอร์เน็ต");
+      return;
+    }
+    const el = document.getElementById(elementId);
+    if (!el) { notify?.("error", "ไม่พบเนื้อหาที่จะส่งออก"); return; }
+    const canvas = await window.html2canvas(el, { scale: 2, backgroundColor: "#F7F9FC", useCORS: true });
+    const img = canvas.toDataURL("image/png");
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF("p", "mm", "a4");
+    const pw = pdf.internal.pageSize.getWidth();
+    const ph = pdf.internal.pageSize.getHeight();
+    const w = pw - 16;
+    const h = (canvas.height * w) / canvas.width;
+    let y = 8, remaining = h;
+    // paginate if the content is taller than one page
+    if (h <= ph - 16) {
+      pdf.addImage(img, "PNG", 8, y, w, h);
+    } else {
+      let sy = 0;
+      const pageContentH = ph - 16;
+      const ratio = canvas.width / w;
+      while (remaining > 0) {
+        const sliceH = Math.min(pageContentH, remaining);
+        const sCanvas = document.createElement("canvas");
+        sCanvas.width = canvas.width;
+        sCanvas.height = sliceH * ratio;
+        const ctx = sCanvas.getContext("2d");
+        ctx.drawImage(canvas, 0, sy * ratio, canvas.width, sliceH * ratio, 0, 0, canvas.width, sliceH * ratio);
+        pdf.addImage(sCanvas.toDataURL("image/png"), "PNG", 8, 8, w, sliceH);
+        remaining -= sliceH;
+        sy += sliceH;
+        if (remaining > 0) pdf.addPage();
+      }
+    }
+    const stamp = new Date().toISOString().slice(0, 10);
+    pdf.save(`Nachi-Store-${stamp}.pdf`);
+    notify?.("success", "ส่งออก PDF แล้ว");
+  } catch (e) {
+    notify?.("error", "ส่งออก PDF ไม่สำเร็จ");
+  }
+}
+
+function ExportBar({ items, requisitions, purchaseOrders, pdfTargetId, notify }) {
+  return (
+    <div className="flex gap-2">
+      <button
+        onClick={() => exportExcel({ items, requisitions, purchaseOrders, notify })}
+        className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-slate-200 bg-white text-sm font-medium text-slate-600 hover:bg-slate-50 transition-colors"
+      >
+        <FileText size={15} className="text-emerald-600" /> Excel
+      </button>
+      <button
+        onClick={() => exportPDF(pdfTargetId, notify)}
+        className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-slate-200 bg-white text-sm font-medium text-slate-600 hover:bg-slate-50 transition-colors"
+      >
+        <FileText size={15} className="text-red-500" /> PDF
+      </button>
+    </div>
+  );
+}
+
+// ---------- Dashboard ----------
+function Dashboard({ items, requisitions, purchaseOrders, user, notify }) {
   const isAdmin = user.id === "admin";
   const myItems = visibleItems(items, user);
   const lowStock = myItems.filter((i) => i.stock <= i.minStock);
   const myReqs = requisitions.filter((r) => r.deptId === user.id);
-  const pendingReqs = requisitions.filter((r) => r.status === "pending" && (isAdmin || r.deptId === user.id));
-  const openPOs = purchaseOrders.filter((p) => p.status === "ordered" && (isAdmin || p.deptId === user.id));
+  const openStatuses = ["pending_approval", "awaiting_order", "awaiting_supplier", "awaiting_import"];
+  const pendingPOApproval = purchaseOrders.filter((p) => p.status === "pending_approval" && (isAdmin || p.deptId === user.id));
+  const openPOs = purchaseOrders.filter((p) => openStatuses.includes(p.status) && (isAdmin || p.deptId === user.id));
 
   const cards = [
     { label: "สินค้าใกล้หมด", value: lowStock.length, icon: TrendingDown, color: "#B45309" },
-    { label: isAdmin ? "รออนุมัติ (ทุกแผนก)" : "คำขอของแผนก", value: isAdmin ? pendingReqs.length : myReqs.length, icon: ClipboardList, color: "#1E3A5F" },
+    { label: isAdmin ? "รออนุมัติสั่งซื้อ" : "รออนุมัติสั่งซื้อ", value: pendingPOApproval.length, icon: Clock, color: "#B45309" },
     { label: "สั่งซื้อค้างรับ", value: openPOs.length, icon: ShoppingCart, color: "#5B21B6" },
-    { label: isAdmin ? "สินค้าทั้งหมด" : "สินค้าของแผนก", value: myItems.length, icon: Package, color: "#065F46" },
+    { label: isAdmin ? "การเบิกทั้งหมด" : "การเบิกของแผนก", value: (isAdmin ? requisitions : myReqs).length, icon: ClipboardList, color: "#065F46" },
   ];
 
-  // Per-department summary (admin only): items visible to a dept = central + that dept's own
+  // Per-department summary (admin only)
   const deptStats = DEPARTMENTS.map((d) => {
     const deptItems = items.filter((i) => i.deptId === "central" || i.deptId === d.id);
+    const lowItems = deptItems.filter((i) => i.stock <= i.minStock);
+    const pendingItems = purchaseOrders.filter((p) => p.deptId === d.id && p.status === "pending_approval");
+    const openPOItems = purchaseOrders.filter((p) => p.deptId === d.id && openStatuses.includes(p.status));
     return {
       dept: d,
-      pending: requisitions.filter((r) => r.deptId === d.id && r.status === "pending").length,
-      lowStock: deptItems.filter((i) => i.stock <= i.minStock).length,
-      openPO: purchaseOrders.filter((p) => p.deptId === d.id && p.status === "ordered").length,
+      pending: pendingItems.length,
+      pendingItems,
+      lowStock: lowItems.length,
+      lowItems,
+      openPO: openPOItems.length,
+      openPOItems,
       reqTotal: requisitions.filter((r) => r.deptId === d.id).length,
     };
   });
@@ -407,6 +644,13 @@ function Dashboard({ items, requisitions, purchaseOrders, user }) {
 
   return (
     <div className="space-y-6">
+      {isAdmin && (
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-medium text-slate-500">รายงาน / KPI</h2>
+          <ExportBar items={items} requisitions={requisitions} purchaseOrders={purchaseOrders} pdfTargetId="dashboard-report" notify={notify} />
+        </div>
+      )}
+      <div id="dashboard-report" className="space-y-6">
       {/* Department banner — shows which department you're viewing */}
       <div
         className="rounded-2xl p-5 flex items-center gap-4 text-white relative overflow-hidden"
@@ -446,57 +690,9 @@ function Dashboard({ items, requisitions, purchaseOrders, user }) {
         <div>
           <h3 className="font-medium text-slate-800 text-sm mb-3">สถานะแต่ละแผนก</h3>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {deptStats.map(({ dept, pending, lowStock: low, openPO, reqTotal }) => {
-              const Icon = DEPT_ICON[dept.icon] || Package;
-              return (
-                <div key={dept.id} className="bg-white rounded-2xl border border-slate-100 p-5">
-                  <div className="flex items-center gap-3 mb-4">
-                    <div className="w-10 h-10 rounded-xl flex items-center justify-center text-white shrink-0" style={{ background: dept.color }}>
-                      <Icon size={19} strokeWidth={2.2} />
-                    </div>
-                    <div className="min-w-0">
-                      <div className="font-semibold text-slate-800 text-sm truncate">{dept.name}</div>
-                      <div className="text-xs text-slate-400">คำขอสะสม {reqTotal} รายการ</div>
-                    </div>
-                  </div>
-
-                  {/* Alert badges */}
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-slate-500 flex items-center gap-1.5">
-                        <Clock size={13} className="text-amber-600" /> รออนุมัติ
-                      </span>
-                      <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${pending > 0 ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-400"}`}>
-                        {pending}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-slate-500 flex items-center gap-1.5">
-                        <TrendingDown size={13} className="text-red-500" /> ใกล้หมดคลัง
-                      </span>
-                      <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${low > 0 ? "bg-red-100 text-red-600" : "bg-slate-100 text-slate-400"}`}>
-                        {low}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-slate-500 flex items-center gap-1.5">
-                        <ShoppingCart size={13} className="text-violet-600" /> สั่งซื้อค้างรับ
-                      </span>
-                      <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${openPO > 0 ? "bg-violet-100 text-violet-700" : "bg-slate-100 text-slate-400"}`}>
-                        {openPO}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Mini activity bar */}
-                  <div className="mt-4">
-                    <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
-                      <div className="h-full rounded-full transition-all" style={{ width: `${(reqTotal / maxReq) * 100}%`, background: dept.color }} />
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
+            {deptStats.map((s) => (
+              <DeptStatusCard key={s.dept.id} stat={s} maxReq={maxReq} />
+            ))}
           </div>
         </div>
       )}
@@ -573,7 +769,7 @@ function Dashboard({ items, requisitions, purchaseOrders, user }) {
                 <div key={r.id} className="px-5 py-3 flex items-center justify-between">
                   <div>
                     <div className="text-sm font-medium text-slate-700">{r.itemName} × {r.qty}</div>
-                    <div className="text-xs text-slate-400">{r.deptName} · {fmtDate(r.createdAt)}</div>
+                    <div className="text-xs text-slate-400">{r.deptName} · {fmtDateTime(r.createdAt)}</div>
                   </div>
                   <Badge status={r.status} />
                 </div>
@@ -581,6 +777,7 @@ function Dashboard({ items, requisitions, purchaseOrders, user }) {
             </div>
           );
         })()}
+      </div>
       </div>
     </div>
   );
@@ -663,7 +860,8 @@ function Inventory({ items, setItems, user, notify, confirm }) {
           />
         </div>
         {canManage && (
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
+            <ExportBar items={items} requisitions={[]} purchaseOrders={[]} pdfTargetId="inventory-report" notify={notify} />
             <label className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl border border-slate-200 text-sm font-medium text-slate-600 hover:bg-slate-50 cursor-pointer transition-colors">
               <Upload size={15} /> นำเข้า CSV
               <input type="file" accept=".csv" onChange={handleCSV} className="hidden" />
@@ -678,7 +876,7 @@ function Inventory({ items, setItems, user, notify, confirm }) {
         )}
       </div>
 
-      <div className="bg-white rounded-2xl border border-slate-100 overflow-hidden">
+      <div id="inventory-report" className="bg-white rounded-2xl border border-slate-100 overflow-hidden">
         {filtered.length === 0 ? (
           <EmptyState icon={Package} title="ไม่พบสินค้า" sub="ลองค้นหาด้วยคำอื่น หรือเพิ่มสินค้าใหม่" />
         ) : (
@@ -847,21 +1045,20 @@ function Field({ label, value, onChange, type = "text" }) {
   );
 }
 
-// ---------- Requisitions ----------
+// ---------- Requisitions (เบิกของ) — no approval; stock deducts immediately ----------
 function Requisitions({ requisitions, setRequisitions, items, setItems, user, purchaseOrders, setPurchaseOrders, notify, confirm }) {
-  const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [pickedItem, setPickedItem] = useState(null);
   const [scanning, setScanning] = useState(false);
+  const [period, setPeriod] = useState("all"); // all | day | month | year
+  const [deptFilter, setDeptFilter] = useState("all");
   const isAdmin = user.id === "admin";
-  const canApprove = isAdmin;
   const myItems = visibleItems(items, user);
 
   const catalog = myItems.filter(
     (i) => i.name.toLowerCase().includes(search.toLowerCase()) || i.sku.toLowerCase().includes(search.toLowerCase())
   );
 
-  // Match a scanned code against SKU (or exact name) within visible items, then open the withdraw popup
   const handleScan = (raw) => {
     const code = (raw || "").trim();
     setScanning(false);
@@ -870,6 +1067,7 @@ function Requisitions({ requisitions, setRequisitions, items, setItems, user, pu
       (i) => i.sku.toLowerCase() === code.toLowerCase() || i.name.toLowerCase() === code.toLowerCase()
     );
     if (found) {
+      if (found.stock <= 0) { notify("error", `${found.name} หมดสต็อก`); return; }
       setPickedItem(found);
       notify("success", `พบสินค้า: ${found.name}`);
     } else {
@@ -878,102 +1076,43 @@ function Requisitions({ requisitions, setRequisitions, items, setItems, user, pu
     }
   };
 
-  const submitNew = ({ item, qty, note }) => {
+  // Withdraw immediately: deduct stock, record dept/line/machine + timestamp, mark fulfilled
+  const submitWithdraw = ({ item, qty, deptId, deptName, line, machine, note }) => {
+    const current = items.find((i) => i.id === item.id);
+    if (!current || current.stock < qty) {
+      notify("error", `สต็อกไม่พอ: คงเหลือ ${current ? current.stock : 0} ${item.unit}`);
+      return;
+    }
+    setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, stock: Math.max(0, i.stock - qty) } : i)));
     setRequisitions((prev) => [
-      {
-        id: uid(),
-        itemId: item.id,
-        itemName: item.name,
-        qty,
-        note,
-        status: "pending",
-        deptId: user.id,
-        deptName: user.name,
-        createdAt: Date.now(),
-      },
+      { id: uid(), itemId: item.id, itemName: item.name, qty, note, status: "fulfilled", deptId, deptName, line, machine, createdAt: Date.now() },
       ...prev,
     ]);
     setPickedItem(null);
-    notify("success", "ส่งคำขอเบิกแล้ว รออนุมัติ");
+    notify("success", `เบิก ${item.name} × ${qty} — ตัดสต็อกแล้ว`);
   };
 
+  const now = new Date();
+  const inPeriod = (ts) => {
+    if (period === "all") return true;
+    const d = new Date(ts);
+    if (period === "day") return d.toDateString() === now.toDateString();
+    if (period === "month") return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+    if (period === "year") return d.getFullYear() === now.getFullYear();
+    return true;
+  };
   const list = requisitions
     .filter((r) => (isAdmin ? true : r.deptId === user.id))
-    .filter((r) => filter === "all" || r.status === filter)
+    .filter((r) => (isAdmin && deptFilter !== "all" ? r.deptId === deptFilter : true))
+    .filter((r) => inPeriod(r.createdAt))
     .sort((a, b) => b.createdAt - a.createdAt);
 
-  // Approve: verify stock, guard against double-processing, deduct atomically
-  const approve = (req) => {
-    const item = items.find((i) => i.id === req.itemId);
-    if (!item) {
-      notify("error", "ไม่พบสินค้านี้ในคลังแล้ว");
-      return;
-    }
-    if (item.stock < req.qty) {
-      notify("error", `สต็อกไม่พอ: คงเหลือ ${item.stock} ${item.unit} แต่ขอเบิก ${req.qty}`);
-      return;
-    }
-    confirm({
-      title: "ยืนยันการอนุมัติคำขอ?",
-      message: `อนุมัติเบิก "${req.itemName}" จำนวน ${req.qty} ${item.unit} — จะตัดสต็อกทันที`,
-      confirmLabel: "อนุมัติ",
-      onConfirm: () => {
-        let done = false;
-        setRequisitions((prev) =>
-          prev.map((r) => {
-            if (r.id === req.id && r.status === "pending") { done = true; return { ...r, status: "approved", decidedAt: Date.now() }; }
-            return r;
-          })
-        );
-        // only deduct if the request was actually still pending (guards double-click)
-        setItems((prev) => {
-          if (!done) return prev;
-          return prev.map((i) => (i.id === req.itemId ? { ...i, stock: Math.max(0, i.stock - req.qty) } : i));
-        });
-        if (done) notify("success", "อนุมัติและตัดสต็อกแล้ว");
-      },
-    });
-  };
-
-  const reject = (req) => {
-    confirm({
-      title: "ยืนยันการปฏิเสธคำขอ?",
-      message: `ปฏิเสธคำขอเบิก "${req.itemName}" จำนวน ${req.qty}`,
-      confirmLabel: "ปฏิเสธ",
-      tone: "danger",
-      onConfirm: () => {
-        setRequisitions((prev) =>
-          prev.map((r) => (r.id === req.id && r.status === "pending" ? { ...r, status: "rejected", decidedAt: Date.now() } : r))
-        );
-        notify("success", "ปฏิเสธคำขอแล้ว");
-      },
-    });
-  };
-
-  const raiseAsPO = (req) => {
-    const item = items.find((i) => i.id === req.itemId);
-    if (!item) { notify("error", "ไม่พบสินค้านี้ในคลัง"); return; }
-    setPurchaseOrders((prev) => [
-      {
-        id: uid(),
-        itemId: item.id,
-        itemName: item.name,
-        qty: Math.max(item.minStock * 2 - item.stock, req.qty),
-        unitPrice: item.price,
-        status: "ordered",
-        createdAt: Date.now(),
-        requestedBy: req.deptName,
-        deptId: req.deptId,
-        deptName: req.deptName,
-        fromRequisition: req.id,
-      },
-      ...prev,
-    ]);
-    setRequisitions((prev) => prev.map((x) => (x.id === req.id ? { ...x, raisedPO: true } : x)));
-    notify("success", "สร้างใบสั่งซื้อเพิ่มแล้ว");
-  };
-
-  const filters = ["all", "pending", "approved", "rejected", "fulfilled"];
+  const periods = [
+    { id: "all", label: "ทั้งหมด" },
+    { id: "day", label: "วันนี้" },
+    { id: "month", label: "เดือนนี้" },
+    { id: "year", label: "ปีนี้" },
+  ];
 
   return (
     <div className="space-y-5">
@@ -1030,11 +1169,7 @@ function Requisitions({ requisitions, setRequisitions, items, setItems, user, pu
                       <span className={`text-sm font-semibold ${out ? "text-red-500" : low ? "text-amber-700" : "text-slate-700"}`}>
                         คงเหลือ {i.stock} {i.unit}
                       </span>
-                      {out ? (
-                        <span className="text-xs text-red-500">หมดสต็อก</span>
-                      ) : (
-                        <span className="text-xs text-[#1E3A5F] font-medium">เบิก →</span>
-                      )}
+                      {out ? <span className="text-xs text-red-500">หมดสต็อก</span> : <span className="text-xs text-[#1E3A5F] font-medium">เบิก →</span>}
                     </div>
                   </button>
                 );
@@ -1044,28 +1179,36 @@ function Requisitions({ requisitions, setRequisitions, items, setItems, user, pu
         </div>
       )}
 
-      {/* Request history */}
+      {/* History */}
       <div>
-        <div className="flex items-center justify-between gap-3 mb-3">
-          <h3 className="font-medium text-slate-800 text-sm">{isAdmin ? "คำขอเบิกทั้งหมด" : "ประวัติการเบิกของแผนก"}</h3>
-        </div>
-        <div className="flex gap-2 overflow-x-auto pb-1 mb-3">
-          {filters.map((f) => (
+        <h3 className="font-medium text-slate-800 text-sm mb-3">{isAdmin ? "ประวัติการเบิก (ทุกแผนก)" : "ประวัติการเบิกของแผนก"}</h3>
+        <div className="flex flex-wrap gap-2 mb-3">
+          {periods.map((p) => (
             <button
-              key={f}
-              onClick={() => setFilter(f)}
+              key={p.id}
+              onClick={() => setPeriod(p.id)}
               className={`px-3.5 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors ${
-                filter === f ? "bg-[#1E3A5F] text-white" : "bg-white text-slate-500 border border-slate-200 hover:bg-slate-50"
+                period === p.id ? "bg-[#1E3A5F] text-white" : "bg-white text-slate-500 border border-slate-200 hover:bg-slate-50"
               }`}
             >
-              {f === "all" ? "ทั้งหมด" : STATUS_META[f]?.label}
+              {p.label}
             </button>
           ))}
+          {isAdmin && (
+            <select
+              value={deptFilter}
+              onChange={(e) => setDeptFilter(e.target.value)}
+              className="px-3 py-1.5 rounded-full text-xs font-medium border border-slate-200 bg-white text-slate-600 focus:outline-none"
+            >
+              <option value="all">ทุกแผนก</option>
+              {DEPARTMENTS.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+            </select>
+          )}
         </div>
 
         <div className="bg-white rounded-2xl border border-slate-100 overflow-hidden">
           {list.length === 0 ? (
-            <EmptyState icon={ClipboardList} title="ไม่มีคำขอเบิกในหมวดนี้" />
+            <EmptyState icon={ClipboardList} title="ไม่มีประวัติการเบิกในช่วงนี้" />
           ) : (
             <div className="divide-y divide-slate-50">
               {list.map((r) => (
@@ -1075,42 +1218,11 @@ function Requisitions({ requisitions, setRequisitions, items, setItems, user, pu
                       {r.itemName} <span className="text-slate-400 font-normal">× {r.qty}</span>
                     </div>
                     <div className="text-xs text-slate-400 mt-0.5">
-                      {r.deptName} · {fmtDate(r.createdAt)}
+                      {r.deptName}{r.line ? ` · Line ${r.line}` : ""}{r.machine ? ` · ${r.machine}` : ""}{" · "}{fmtDateTime(r.createdAt)}
                     </div>
                     {r.note && <div className="text-xs text-slate-500 mt-1 italic">"{r.note}"</div>}
                   </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    {canApprove && r.status === "pending" ? (
-                      <>
-                        <button
-                          onClick={() => approve(r)}
-                          className="p-2.5 rounded-lg bg-emerald-50 text-emerald-600 hover:bg-emerald-100"
-                          title="อนุมัติ"
-                          aria-label="อนุมัติคำขอ"
-                        >
-                          <Check size={16} />
-                        </button>
-                        <button
-                          onClick={() => reject(r)}
-                          className="p-2.5 rounded-lg bg-red-50 text-red-500 hover:bg-red-100"
-                          title="ปฏิเสธ"
-                          aria-label="ปฏิเสธคำขอ"
-                        >
-                          <X size={16} />
-                        </button>
-                      </>
-                    ) : (
-                      <Badge status={r.status} />
-                    )}
-                    {canApprove && r.status === "approved" && !r.raisedPO && (
-                      <button
-                        onClick={() => raiseAsPO(r)}
-                        className="text-xs text-violet-600 hover:underline whitespace-nowrap"
-                      >
-                        สั่งซื้อเพิ่ม
-                      </button>
-                    )}
-                  </div>
+                  <Badge status={r.status} />
                 </div>
               ))}
             </div>
@@ -1119,9 +1231,8 @@ function Requisitions({ requisitions, setRequisitions, items, setItems, user, pu
       </div>
 
       {pickedItem && (
-        <RequisitionDetail item={pickedItem} notify={notify} onClose={() => setPickedItem(null)} onSubmit={submitNew} />
+        <RequisitionDetail item={pickedItem} user={user} notify={notify} onClose={() => setPickedItem(null)} onSubmit={submitWithdraw} />
       )}
-
       {scanning && (
         <ScannerModal onDetected={handleScan} onClose={() => setScanning(false)} notify={notify} />
       )}
@@ -1234,25 +1345,76 @@ function ScannerModal({ onDetected, onClose, notify }) {
   );
 }
 
-// Popup: item detail + qty (capped at stock) + note + confirm withdraw
-function RequisitionDetail({ item, onSubmit, onClose, notify }) {
+// Shared: department (fixed to login dept for a user) + line + machine dropdowns
+function DeptLineMachineFields({ user, deptId, setDeptId, line, setLine, machine, setMachine }) {
+  const isAdmin = user.id === "admin";
+  const lines = linesFor(deptId);
+  const machines = machinesFor(deptId);
+  return (
+    <>
+      <label className="block">
+        <span className="text-xs text-slate-500 mb-1 block">แผนก</span>
+        <select
+          value={deptId}
+          onChange={(e) => { setDeptId(e.target.value); setLine(""); setMachine(""); }}
+          disabled={!isAdmin}
+          className="w-full px-3 py-2.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#1E3A5F]/20 disabled:bg-slate-50 disabled:text-slate-500"
+        >
+          {DEPARTMENTS.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+        </select>
+      </label>
+      <div className="grid grid-cols-2 gap-3">
+        <label className="block">
+          <span className="text-xs text-slate-500 mb-1 block">Line</span>
+          <select
+            value={line}
+            onChange={(e) => setLine(e.target.value)}
+            className="w-full px-3 py-2.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#1E3A5F]/20"
+          >
+            <option value="">— เลือก Line —</option>
+            {lines.map((l) => <option key={l} value={l}>{l}</option>)}
+          </select>
+        </label>
+        <label className="block">
+          <span className="text-xs text-slate-500 mb-1 block">เครื่องจักร</span>
+          <select
+            value={machine}
+            onChange={(e) => setMachine(e.target.value)}
+            className="w-full px-3 py-2.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#1E3A5F]/20"
+          >
+            <option value="">— เลือกเครื่องจักร —</option>
+            {machines.map((m) => <option key={m} value={m}>{m}</option>)}
+          </select>
+        </label>
+      </div>
+    </>
+  );
+}
+
+// Popup: item detail + qty + dept/line/machine + note; confirms an immediate withdrawal
+function RequisitionDetail({ item, user, onSubmit, onClose, notify }) {
+  const defaultDept = user.id === "admin" ? DEPARTMENTS[0].id : user.id;
   const [qty, setQty] = useState("1");
+  const [deptId, setDeptId] = useState(defaultDept);
+  const [line, setLine] = useState("");
+  const [machine, setMachine] = useState("");
   const [note, setNote] = useState("");
   const qtyNum = toNum(qty, NaN);
   const overStock = Number.isFinite(qtyNum) && qtyNum > item.stock;
-  const valid = Number.isFinite(qtyNum) && qtyNum > 0 && qtyNum <= item.stock;
+  const valid = Number.isFinite(qtyNum) && qtyNum > 0 && qtyNum <= item.stock && line && machine;
   const low = item.stock <= item.minStock;
+  const deptName = (DEPARTMENTS.find((d) => d.id === deptId) || {}).name || deptId;
 
   const handleSubmit = () => {
     if (!Number.isFinite(qtyNum) || qtyNum <= 0) { notify?.("error", "กรุณากรอกจำนวนที่ต้องการเบิก"); return; }
     if (qtyNum > item.stock) { notify?.("error", `เบิกได้ไม่เกิน ${item.stock} ${item.unit} (คงเหลือในสต็อก)`); return; }
-    onSubmit({ item, qty: qtyNum, note: note.trim() });
+    if (!line || !machine) { notify?.("error", "กรุณาเลือก Line และเครื่องจักร"); return; }
+    onSubmit({ item, qty: qtyNum, deptId, deptName, line, machine, note: note.trim() });
   };
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={onClose}>
-      <div className="bg-white rounded-2xl w-full max-w-md overflow-hidden" onClick={(e) => e.stopPropagation()}>
-        {/* Header with item info */}
+      <div className="bg-white rounded-2xl w-full max-w-md overflow-hidden max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="p-5 border-b border-slate-100">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
@@ -1276,12 +1438,12 @@ function RequisitionDetail({ item, onSubmit, onClose, notify }) {
           {low && <div className="mt-2 text-xs text-amber-600">⚠ สินค้าใกล้หมด (ขั้นต่ำ {item.minStock})</div>}
         </div>
 
-        {/* Withdraw form */}
         <div className="p-5 space-y-3">
           <div>
             <Field label={`จำนวนที่ต้องการเบิก (${item.unit}) — สูงสุด ${item.stock}`} type="number" value={qty} onChange={setQty} />
             {overStock && <div className="text-xs text-red-500 mt-1">เกินจำนวนคงเหลือในสต็อก</div>}
           </div>
+          <DeptLineMachineFields user={user} deptId={deptId} setDeptId={setDeptId} line={line} setLine={setLine} machine={machine} setMachine={setMachine} />
           <label className="block">
             <span className="text-xs text-slate-500 mb-1 block">หมายเหตุ (ไม่บังคับ)</span>
             <textarea
@@ -1308,11 +1470,40 @@ function RequisitionDetail({ item, onSubmit, onClose, notify }) {
   );
 }
 
-// ---------- Purchase Orders ----------
+// ---------- Purchase Orders (สั่งซื้อ) ----------
 function PurchaseOrders({ purchaseOrders, setPurchaseOrders, items, setItems, user, notify, confirm }) {
   const [showNew, setShowNew] = useState(false);
+  const [search, setSearch] = useState("");
   const isAdmin = user.id === "admin";
-  const canReceive = isAdmin;
+
+  const approve = (po) => {
+    confirm({
+      title: "อนุมัติรายการขอสั่งซื้อ?",
+      message: `อนุมัติ "${po.itemName}" × ${po.qty} — จะเข้าสู่ขั้นตอนการสั่งซื้อ`,
+      confirmLabel: "อนุมัติ",
+      onConfirm: () => {
+        setPurchaseOrders((prev) => prev.map((p) => (p.id === po.id && p.status === "pending_approval" ? { ...p, status: "awaiting_order", approvedAt: Date.now() } : p)));
+        notify("success", "อนุมัติแล้ว");
+      },
+    });
+  };
+
+  const reject = (po) => {
+    confirm({
+      title: "ปฏิเสธรายการขอสั่งซื้อ?",
+      message: `ปฏิเสธ "${po.itemName}" × ${po.qty}`,
+      confirmLabel: "ปฏิเสธ",
+      tone: "danger",
+      onConfirm: () => {
+        setPurchaseOrders((prev) => prev.map((p) => (p.id === po.id && p.status === "pending_approval" ? { ...p, status: "rejected", decidedAt: Date.now() } : p)));
+        notify("success", "ปฏิเสธแล้ว");
+      },
+    });
+  };
+
+  const changeStatus = (po, status) => {
+    setPurchaseOrders((prev) => prev.map((p) => (p.id === po.id ? { ...p, status } : p)));
+  };
 
   const receive = (po) => {
     confirm({
@@ -1323,7 +1514,7 @@ function PurchaseOrders({ purchaseOrders, setPurchaseOrders, items, setItems, us
         let done = false;
         setPurchaseOrders((prev) =>
           prev.map((p) => {
-            if (p.id === po.id && p.status === "ordered") { done = true; return { ...p, status: "received", receivedAt: Date.now() }; }
+            if (p.id === po.id && p.status !== "received" && p.status !== "rejected" && p.status !== "pending_approval") { done = true; return { ...p, status: "received", receivedAt: Date.now() }; }
             return p;
           })
         );
@@ -1336,49 +1527,88 @@ function PurchaseOrders({ purchaseOrders, setPurchaseOrders, items, setItems, us
     });
   };
 
-  const scoped = isAdmin ? purchaseOrders : purchaseOrders.filter((p) => p.deptId === user.id);
+  const scoped = (isAdmin ? purchaseOrders : purchaseOrders.filter((p) => p.deptId === user.id))
+    .filter((p) => !search || p.itemName.toLowerCase().includes(search.toLowerCase()) || (p.deptName || "").toLowerCase().includes(search.toLowerCase()));
   const sorted = [...scoped].sort((a, b) => b.createdAt - a.createdAt);
-  const totalOpenValue = scoped.filter(p => p.status === "ordered").reduce((s, p) => s + p.qty * p.unitPrice, 0);
+  const openStatuses = ["pending_approval", "awaiting_order", "awaiting_supplier", "awaiting_import"];
+  const totalOpenValue = scoped.filter((p) => openStatuses.includes(p.status)).reduce((s, p) => s + p.qty * p.unitPrice, 0);
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div className="text-sm text-slate-500">
-          มูลค่าสั่งซื้อค้างรับ{isAdmin ? " (ทุกแผนก)" : ""}: <span className="font-semibold text-slate-700">฿{fmtMoney(totalOpenValue)}</span>
+          มูลค่าค้างรับ{isAdmin ? " (ทุกแผนก)" : ""}: <span className="font-semibold text-slate-700">฿{fmtMoney(totalOpenValue)}</span>
         </div>
-        <button
-          onClick={() => setShowNew(true)}
-          className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-[#1E3A5F] text-white text-sm font-medium hover:bg-[#16304F] transition-colors"
-        >
-          <Plus size={15} /> สั่งซื้อ
-        </button>
+        <div className="flex gap-2">
+          <div className="relative flex-1 sm:w-56">
+            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="ค้นหารายการ / แผนก"
+              className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#1E3A5F]/20"
+            />
+          </div>
+          {!isAdmin && (
+            <button
+              onClick={() => setShowNew(true)}
+              className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-[#1E3A5F] text-white text-sm font-medium hover:bg-[#16304F] transition-colors shrink-0"
+            >
+              <Plus size={15} /> สั่งซื้อ
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="bg-white rounded-2xl border border-slate-100 overflow-hidden">
         {sorted.length === 0 ? (
-          <EmptyState icon={ShoppingCart} title="ยังไม่มีรายการสั่งซื้อ" sub="กดปุ่มสั่งซื้อเพื่อสร้างรายการใหม่ หรืออนุมัติคำขอเบิกแล้วสั่งซื้อเพิ่ม" />
+          <EmptyState icon={ShoppingCart} title={isAdmin ? "ยังไม่มีรายการขอสั่งซื้อ" : "ยังไม่มีรายการสั่งซื้อ"} sub={isAdmin ? "รอแผนกส่งคำขอสั่งซื้อเข้ามา" : "กดปุ่มสั่งซื้อเพื่อสร้างรายการใหม่"} />
         ) : (
           <div className="divide-y divide-slate-50">
             {sorted.map((po) => (
-              <div key={po.id} className="px-5 py-4 flex items-center justify-between gap-4">
+              <div key={po.id} className="px-5 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                 <div className="min-w-0">
                   <div className="font-medium text-slate-700 text-sm">
                     {po.itemName} <span className="text-slate-400 font-normal">× {po.qty}</span>
                   </div>
                   <div className="text-xs text-slate-400 mt-0.5">
-                    ฿{fmtMoney(po.qty * po.unitPrice)} · {po.deptName || po.requestedBy} · {fmtDate(po.createdAt)}
+                    ฿{fmtMoney(po.qty * po.unitPrice)} · {po.deptName || po.requestedBy}
+                    {po.line ? ` · Line ${po.line}` : ""}{po.machine ? ` · ${po.machine}` : ""}
+                    {" · "}{fmtDateTime(po.createdAt)}
                   </div>
+                  {po.imageCount ? <div className="text-[11px] text-slate-400 mt-0.5">แนบรูป {po.imageCount} ภาพ</div> : null}
+                  {po.note && <div className="text-xs text-slate-500 mt-1 italic">"{po.note}"</div>}
                 </div>
+
                 <div className="flex items-center gap-2 shrink-0">
-                  <Badge status={po.status} />
-                  {canReceive && po.status === "ordered" && (
-                    <button
-                      onClick={() => receive(po)}
-                      className="text-xs px-3 py-1.5 rounded-lg bg-[#EFF4FA] text-[#1E3A5F] font-medium hover:bg-[#E1EAF3]"
-                    >
-                      รับของแล้ว
-                    </button>
+                  {/* Admin controls */}
+                  {isAdmin && po.status === "pending_approval" && (
+                    <>
+                      <button onClick={() => approve(po)} className="p-2.5 rounded-lg bg-emerald-50 text-emerald-600 hover:bg-emerald-100" title="อนุมัติ" aria-label="อนุมัติ">
+                        <Check size={16} />
+                      </button>
+                      <button onClick={() => reject(po)} className="p-2.5 rounded-lg bg-red-50 text-red-500 hover:bg-red-100" title="ปฏิเสธ" aria-label="ปฏิเสธ">
+                        <X size={16} />
+                      </button>
+                    </>
                   )}
+                  {isAdmin && PO_WORKFLOW.includes(po.status) && (
+                    <>
+                      <select
+                        value={po.status}
+                        onChange={(e) => changeStatus(po, e.target.value)}
+                        className="text-xs px-2 py-2 rounded-lg border border-slate-200 bg-white text-slate-600 focus:outline-none"
+                      >
+                        {PO_WORKFLOW.map((s) => <option key={s} value={s}>{PO_STATUS[s].label}</option>)}
+                      </select>
+                      <button onClick={() => receive(po)} className="text-xs px-3 py-2 rounded-lg bg-[#EFF4FA] text-[#1E3A5F] font-medium hover:bg-[#E1EAF3] whitespace-nowrap">
+                        ได้รับของแล้ว
+                      </button>
+                    </>
+                  )}
+                  {(isAdmin && (po.status === "received" || po.status === "rejected")) && <Badge status={po.status} map={PO_STATUS} />}
+                  {/* User: status only */}
+                  {!isAdmin && <Badge status={po.status} map={PO_STATUS} />}
                 </div>
               </div>
             ))}
@@ -1389,15 +1619,16 @@ function PurchaseOrders({ purchaseOrders, setPurchaseOrders, items, setItems, us
       {showNew && (
         <NewPOForm
           items={visibleItems(items, user)}
+          user={user}
           notify={notify}
           onClose={() => setShowNew(false)}
           onSave={(data) => {
             setPurchaseOrders((prev) => [
-              { id: uid(), status: "ordered", createdAt: Date.now(), requestedBy: user.name, deptId: user.id, deptName: user.name, ...data },
+              { id: uid(), status: "pending_approval", createdAt: Date.now(), requestedBy: user.name, ...data },
               ...prev,
             ]);
             setShowNew(false);
-            notify("success", "สร้างรายการสั่งซื้อแล้ว");
+            notify("success", "ส่งคำขอสั่งซื้อแล้ว รออนุมัติ");
           }}
         />
       )}
@@ -1405,39 +1636,111 @@ function PurchaseOrders({ purchaseOrders, setPurchaseOrders, items, setItems, us
   );
 }
 
-function NewPOForm({ items, onSave, onClose, notify }) {
+function NewPOForm({ items, user, onSave, onClose, notify }) {
+  const defaultDept = user.id === "admin" ? DEPARTMENTS[0].id : user.id;
+  const [search, setSearch] = useState("");
   const [itemId, setItemId] = useState(items[0]?.id || "");
   const [qty, setQty] = useState("10");
+  const [deptId, setDeptId] = useState(defaultDept);
+  const [line, setLine] = useState("");
+  const [machine, setMachine] = useState("");
+  const [note, setNote] = useState("");
+  const [images, setImages] = useState([]); // {name, url} previews (not persisted yet)
   const item = items.find((i) => i.id === itemId);
   const qtyNum = toNum(qty, NaN);
-  const valid = item && Number.isFinite(qtyNum) && qtyNum > 0;
+  const deptName = (DEPARTMENTS.find((d) => d.id === deptId) || {}).name || deptId;
+  const valid = item && Number.isFinite(qtyNum) && qtyNum > 0 && line && machine;
+
+  const filtered = items.filter(
+    (i) => i.name.toLowerCase().includes(search.toLowerCase()) || i.sku.toLowerCase().includes(search.toLowerCase())
+  );
+
+  const onPickImages = (e) => {
+    const files = Array.from(e.target.files || []).slice(0, 3 - images.length);
+    const next = files.map((f) => ({ name: f.name, url: URL.createObjectURL(f) }));
+    setImages((prev) => [...prev, ...next].slice(0, 3));
+    e.target.value = "";
+  };
+  const removeImage = (idx) => setImages((prev) => prev.filter((_, i) => i !== idx));
 
   const handleSave = () => {
     if (!item) { notify?.("error", "กรุณาเลือกสินค้า"); return; }
     if (!Number.isFinite(qtyNum) || qtyNum <= 0) { notify?.("error", "จำนวนที่สั่งต้องมากกว่า 0"); return; }
-    onSave({ itemId: item.id, itemName: item.name, qty: qtyNum, unitPrice: item.price });
+    if (!line || !machine) { notify?.("error", "กรุณาเลือก Line และเครื่องจักร"); return; }
+    onSave({
+      itemId: item.id, itemName: item.name, qty: qtyNum, unitPrice: item.price,
+      deptId, deptName, line, machine, note: note.trim(), imageCount: images.length,
+    });
   };
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={onClose}>
-      <div className="bg-white rounded-2xl p-6 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+      <div className="bg-white rounded-2xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <h3 className="font-semibold text-slate-800 mb-4">สั่งซื้อสินค้า</h3>
         {items.length === 0 ? (
           <p className="text-sm text-slate-500 mb-4">ยังไม่มีสินค้าสำหรับแผนกนี้ กรุณาให้แอดมินเพิ่มสินค้าก่อน</p>
         ) : (
           <div className="space-y-3">
-            <label className="block">
-              <span className="text-xs text-slate-500 mb-1 block">สินค้า</span>
+            <div>
+              <span className="text-xs text-slate-500 mb-1 block">ค้นหา / เลือกสินค้า</span>
+              <div className="relative mb-2">
+                <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="พิมพ์ชื่อสินค้า หรือ SKU"
+                  className="w-full pl-9 pr-3 py-2.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#1E3A5F]/20"
+                />
+              </div>
               <select
                 value={itemId}
                 onChange={(e) => setItemId(e.target.value)}
+                size={Math.min(4, Math.max(2, filtered.length))}
                 className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#1E3A5F]/20"
               >
-                {items.map((i) => <option key={i.id} value={i.id}>{i.name} ({i.sku})</option>)}
+                {filtered.map((i) => <option key={i.id} value={i.id}>{i.name} ({i.sku}) — คงเหลือ {i.stock}</option>)}
               </select>
-            </label>
+            </div>
+
             <Field label="จำนวนที่สั่ง" type="number" value={qty} onChange={setQty} />
-            {item && valid && <div className="text-xs text-slate-400">ราคา/หน่วย ฿{fmtMoney(item.price)} · รวม ฿{fmtMoney(item.price * qtyNum)}</div>}
+            {item && Number.isFinite(qtyNum) && qtyNum > 0 && (
+              <div className="text-xs text-slate-400">ราคา/หน่วย ฿{fmtMoney(item.price)} · รวม ฿{fmtMoney(item.price * qtyNum)}</div>
+            )}
+
+            <DeptLineMachineFields user={user} deptId={deptId} setDeptId={setDeptId} line={line} setLine={setLine} machine={machine} setMachine={setMachine} />
+
+            {/* Image attach — up to 3 (preview only, will persist after Supabase) */}
+            <div>
+              <span className="text-xs text-slate-500 mb-1 block">แนบรูป (สูงสุด 3 ภาพ)</span>
+              <div className="flex gap-2 flex-wrap">
+                {images.map((img, idx) => (
+                  <div key={idx} className="relative w-16 h-16 rounded-lg overflow-hidden border border-slate-200">
+                    <img src={img.url} alt={img.name} className="w-full h-full object-cover" />
+                    <button onClick={() => removeImage(idx)} className="absolute top-0.5 right-0.5 w-5 h-5 rounded-full bg-black/60 text-white flex items-center justify-center" aria-label="ลบรูป">
+                      <X size={11} />
+                    </button>
+                  </div>
+                ))}
+                {images.length < 3 && (
+                  <label className="w-16 h-16 rounded-lg border-2 border-dashed border-slate-200 flex items-center justify-center text-slate-400 cursor-pointer hover:border-[#1E3A5F] hover:text-[#1E3A5F]">
+                    <Plus size={18} />
+                    <input type="file" accept="image/*" multiple onChange={onPickImages} className="hidden" />
+                  </label>
+                )}
+              </div>
+              <div className="text-[11px] text-slate-400 mt-1">* ตอนนี้แนบเพื่อดูตัวอย่าง ยังไม่บันทึกถาวร (จะเก็บจริงเมื่อต่อ Supabase)</div>
+            </div>
+
+            <label className="block">
+              <span className="text-xs text-slate-500 mb-1 block">หมายเหตุ (ไม่บังคับ)</span>
+              <textarea
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                rows={2}
+                className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#1E3A5F]/20"
+                placeholder="รายละเอียดเพิ่มเติม..."
+              />
+            </label>
           </div>
         )}
         <div className="flex gap-2 mt-5">
@@ -1447,7 +1750,7 @@ function NewPOForm({ items, onSave, onClose, notify }) {
             disabled={!valid}
             className="flex-1 py-2.5 rounded-xl bg-[#1E3A5F] text-white text-sm font-medium hover:bg-[#16304F] disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            สั่งซื้อ
+            ส่งคำขอสั่งซื้อ
           </button>
         </div>
       </div>
@@ -1598,7 +1901,7 @@ function App() {
         </div>
 
         {activeTab === "dashboard" && (
-          <Dashboard items={items} requisitions={requisitions} purchaseOrders={purchaseOrders} user={user} />
+          <Dashboard items={items} requisitions={requisitions} purchaseOrders={purchaseOrders} user={user} notify={notify} />
         )}
         {activeTab === "inventory" && (
           <Inventory items={items} setItems={setItems} user={user} notify={notify} confirm={confirm} />
