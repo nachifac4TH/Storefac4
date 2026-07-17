@@ -12,7 +12,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
     body { font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif; margin: 0; }
     input[type=number]::-webkit-inner-spin-button,
@@ -208,11 +208,25 @@ function toNum(v, fallback = 0) {
 const SUPABASE_URL = "https://ljvjpuovmmwrsgpjyyyp.supabase.co";       // เช่น "https://abcd1234.supabase.co"
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxqdmpwdW92bW13cnNncGp5eXlwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQwMDgzNzUsImV4cCI6MjA5OTU4NDM3NX0.5tV7nJWA2CMXLtRNy23XB2al013yE2h2gDQLWEj6oGE";  // anon public key (ยาวๆ ขึ้นต้น eyJ...)
 
-const CLOUD =
-  typeof SUPABASE_URL === "string" && SUPABASE_URL.startsWith("http") &&
-  typeof SUPABASE_ANON_KEY === "string" && SUPABASE_ANON_KEY.length > 20 &&
-  typeof window !== "undefined" && window.supabase;
-const sb = CLOUD ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
+// อีเมล admin คงที่ (ซ่อนไว้) — Admin ใส่แค่รหัสผ่าน ต้องตรงกับ user ที่สร้างใน Supabase
+const ADMIN_EMAIL = "admin@nachi.local";
+
+let sb = null;
+let CLOUD = false;
+try {
+  const hasLib = typeof window !== "undefined" && window.supabase && typeof window.supabase.createClient === "function";
+  const configured =
+    typeof SUPABASE_URL === "string" && SUPABASE_URL.startsWith("http") &&
+    typeof SUPABASE_ANON_KEY === "string" && SUPABASE_ANON_KEY.length > 20;
+  if (hasLib && configured) {
+    sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    CLOUD = true;
+  }
+} catch (e) {
+  console.error("Supabase init failed, falling back to local mode:", e);
+  sb = null;
+  CLOUD = false;
+}
 
 // ---------- Row <-> app object mappers ----------
 const itemFromRow = (r) => ({ id: r.id, sku: r.sku || "", name: r.name, unit: r.unit || "ชิ้น", stock: r.stock, minStock: r.min_stock, price: Number(r.price), category: r.category || "ทั่วไป", deptId: r.dept_id || "central" });
@@ -436,19 +450,18 @@ function Toast({ toasts }) {
   );
 }
 
-// Supabase email/password sign-in — used for admin login (modal) in cloud mode
+// Supabase admin sign-in — password only (email is fixed in code)
 function SupabaseLogin({ onSignedIn, onClose, notify, asModal }) {
-  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
   const submit = async () => {
-    if (!email.trim() || !password) { setErr("กรุณากรอกอีเมลและรหัสผ่าน"); return; }
+    if (!password) { setErr("กรุณากรอกรหัสผ่าน"); return; }
     setBusy(true); setErr("");
-    const { error } = await db.signIn(email.trim(), password);
+    const { error } = await db.signIn(ADMIN_EMAIL, password);
     setBusy(false);
-    if (error) { setErr("เข้าสู่ระบบไม่สำเร็จ: " + (error.message || "ตรวจสอบอีเมล/รหัสผ่าน")); return; }
+    if (error) { setErr("รหัสผ่านไม่ถูกต้อง"); return; }
     const s = await db.getSession();
     onSignedIn(s);
     notify && notify("success", "เข้าสู่ระบบผู้ดูแลสำเร็จ");
@@ -460,18 +473,9 @@ function SupabaseLogin({ onSignedIn, onClose, notify, asModal }) {
         <ShieldCheck size={18} className="text-emerald-400" /> เข้าสู่ระบบผู้ดูแล (Admin)
       </div>
       <label className="block">
-        <span className="text-xs text-slate-400 mb-1 block">อีเมล</span>
+        <span className="text-xs text-slate-400 mb-1 block">รหัสผ่านผู้ดูแล</span>
         <input
-          type="email" autoFocus value={email}
-          onChange={(e) => { setEmail(e.target.value); setErr(""); }}
-          placeholder="admin@nachi.local"
-          className="w-full px-3 py-3 rounded-xl bg-white/5 border border-white/10 text-white placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-[#7FD4A8]/30"
-        />
-      </label>
-      <label className="block">
-        <span className="text-xs text-slate-400 mb-1 block">รหัสผ่าน</span>
-        <input
-          type="password" value={password}
+          type="password" autoFocus value={password}
           onChange={(e) => { setPassword(e.target.value); setErr(""); }}
           onKeyDown={(e) => e.key === "Enter" && submit()}
           placeholder="••••••••"
@@ -485,7 +489,6 @@ function SupabaseLogin({ onSignedIn, onClose, notify, asModal }) {
           {busy ? "กำลังเข้าสู่ระบบ..." : "เข้าสู่ระบบ"}
         </button>
       </div>
-      <p className="text-center text-white/35 text-[11px] pt-1">สร้างผู้ใช้ได้ที่ Supabase → Authentication → Users</p>
     </div>
   );
 
@@ -2657,8 +2660,17 @@ function App() {
 
     /* ================= END APP CODE ================= */
 
-    const root = ReactDOM.createRoot(document.getElementById("root"));
-    root.render(React.createElement(App));
+    // Render with a visible error catch so we never show a blank white screen
+    try {
+      const root = ReactDOM.createRoot(document.getElementById("root"));
+      root.render(React.createElement(App));
+    } catch (err) {
+      document.getElementById("root").innerHTML =
+        '<div style="padding:24px;font-family:sans-serif;color:#b91c1c">' +
+        '<b>เกิดข้อผิดพลาดในการโหลดแอป</b><br/><br/>' +
+        String(err && err.message ? err.message : err) + '</div>';
+      console.error(err);
+    }
   </script>
 </body>
 </html>
