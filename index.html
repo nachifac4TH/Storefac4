@@ -20,7 +20,6 @@
     #qr-reader video { width: 100% !important; border-radius: 0 !important; object-fit: cover; }
     #qr-reader { border: none !important; }
     #qr-reader__dashboard_section_csr button { display: none; }
-    /* Readability: native select option list should always be dark on white */
     select option { color: #1e293b; background: #ffffff; }
   </style>
 </head>
@@ -234,7 +233,7 @@ try {
 const itemFromRow = (r) => ({ id: r.id, sku: r.sku || "", name: r.name, unit: r.unit || "ชิ้น", stock: r.stock, minStock: r.min_stock, price: Number(r.price), category: r.category || "ทั่วไป", deptId: r.dept_id || "central" });
 const itemToRow = (i) => ({ sku: i.sku || "", name: i.name, unit: i.unit || "ชิ้น", stock: toNum(i.stock, 0), min_stock: toNum(i.minStock, 0), price: toNum(i.price, 0), category: i.category || "ทั่วไป", dept_id: i.deptId || "central" });
 const reqFromRow = (r) => ({ id: r.id, itemId: r.item_id, itemName: r.item_name, qty: r.qty, note: r.note || "", status: r.status, deptId: r.dept_id, deptName: r.dept_name, line: r.line || "", machine: r.machine || "", createdAt: new Date(r.created_at).getTime() });
-const poFromRow = (r) => ({ id: r.id, itemId: r.item_id, itemName: r.item_name, qty: r.qty, unitPrice: Number(r.unit_price), note: r.note || "", status: r.status, deptId: r.dept_id, deptName: r.dept_name, requestedBy: r.requested_by, line: r.line || "", machine: r.machine || "", imageUrls: r.image_urls || [], imageCount: (r.image_urls || []).length, createdAt: new Date(r.created_at).getTime() });
+const poFromRow = (r) => ({ id: r.id, itemId: r.item_id, itemName: r.item_name, qty: r.qty, unitPrice: Number(r.unit_price), note: r.note || "", status: r.status, deptId: r.dept_id, deptName: r.dept_name, requestedBy: r.requested_by, line: r.line || "", machine: r.machine || "", urgent: !!r.urgent, imageUrls: r.image_urls || [], imageCount: (r.image_urls || []).length, createdAt: new Date(r.created_at).getTime() });
 
 // ---------- localStorage helpers (used when Supabase not configured) ----------
 const LS_PREFIX = "nachi_store_";
@@ -345,7 +344,7 @@ const db = {
       item_id: po.itemId, item_name: po.itemName, qty: po.qty, unit_price: po.unitPrice,
       note: po.note || "", status: "pending_approval", dept_id: po.deptId, dept_name: po.deptName,
       requested_by: po.requestedBy, line: po.line || "", machine: po.machine || "",
-      image_urls: po.imageUrls || [],
+      image_urls: po.imageUrls || [], urgent: !!po.urgent,
     };
     const { data, error } = await sb.from("purchase_orders").insert(row).select().single();
     if (error) throw error;
@@ -360,6 +359,26 @@ const db = {
   async receivePO(id) {
     if (!CLOUD) return null;
     const { error } = await sb.rpc("receive_po", { p_po_id: id });
+    if (error) throw error;
+  },
+  async deleteRequisition(id) {
+    if (!CLOUD) return null;
+    const { error } = await sb.from("requisitions").delete().eq("id", id);
+    if (error) throw error;
+  },
+  async deletePO(id) {
+    if (!CLOUD) return null;
+    const { error } = await sb.from("purchase_orders").delete().eq("id", id);
+    if (error) throw error;
+  },
+  async clearRequisitions(ids) {
+    if (!CLOUD) return null;
+    const { error } = await sb.from("requisitions").delete().in("id", ids);
+    if (error) throw error;
+  },
+  async clearPOs(ids) {
+    if (!CLOUD) return null;
+    const { error } = await sb.from("purchase_orders").delete().in("id", ids);
     if (error) throw error;
   },
 
@@ -1724,6 +1743,44 @@ function Requisitions({ requisitions, setRequisitions, items, setItems, user, pu
     .filter((r) => inPeriod(r.createdAt))
     .sort((a, b) => b.createdAt - a.createdAt);
 
+  // Admin: delete a requisition and return its qty to stock
+  const returnStock = (r) => {
+    if (r.status !== "fulfilled") return;
+    const cur = items.find((i) => i.id === r.itemId);
+    if (db.cloud && cur) { db.updateItem(r.itemId, { ...cur, stock: cur.stock + r.qty }).catch(() => {}); }
+    setItems((prev) => prev.map((i) => (i.id === r.itemId ? { ...i, stock: i.stock + r.qty } : i)));
+  };
+  const deleteReq = (r) => {
+    confirm({
+      title: "ลบรายการเบิกนี้?",
+      message: `ลบ "${r.itemName}" × ${r.qty} — ของ ${r.qty} จะถูกคืนเข้าคลัง`,
+      confirmLabel: "ลบและคืนสต็อก",
+      tone: "danger",
+      onConfirm: () => {
+        returnStock(r);
+        if (db.cloud) db.deleteRequisition(r.id).catch(() => notify("error", "ลบไม่สำเร็จ"));
+        setRequisitions((prev) => prev.filter((x) => x.id !== r.id));
+        notify("success", "ลบรายการและคืนสต็อกแล้ว");
+      },
+    });
+  };
+  const clearReqs = () => {
+    if (list.length === 0) return;
+    confirm({
+      title: "ล้างประวัติการเบิกทั้งหมด?",
+      message: `จะลบ ${list.length} รายการที่แสดงอยู่ และคืนสต็อกทั้งหมดกลับเข้าคลัง`,
+      confirmLabel: "ล้างทั้งหมด",
+      tone: "danger",
+      onConfirm: () => {
+        list.forEach(returnStock);
+        const ids = list.map((r) => r.id);
+        if (db.cloud) db.clearRequisitions(ids).catch(() => notify("error", "ล้างไม่สำเร็จ"));
+        setRequisitions((prev) => prev.filter((x) => !ids.includes(x.id)));
+        notify("success", "ล้างประวัติและคืนสต็อกแล้ว");
+      },
+    });
+  };
+
   const periods = [
     { id: "all", label: "ทั้งหมด" },
     { id: "day", label: "วันนี้" },
@@ -1815,7 +1872,14 @@ function Requisitions({ requisitions, setRequisitions, items, setItems, user, pu
 
       {/* History */}
       <div>
-        <h3 className={`font-medium text-sm mb-3 ${dark ? "text-slate-100" : "text-slate-800"}`}>{isAdmin ? "ประวัติการเบิก (ทุกแผนก)" : "ประวัติการเบิกของแผนก"}</h3>
+        <div className="flex items-center justify-between gap-2 mb-3">
+          <h3 className={`font-medium text-sm ${dark ? "text-slate-100" : "text-slate-800"}`}>{isAdmin ? "ประวัติการเบิก (ทุกแผนก)" : "ประวัติการเบิกของแผนก"}</h3>
+          {isAdmin && list.length > 0 && (
+            <button onClick={clearReqs} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-red-600 bg-red-50 hover:bg-red-100 transition-colors">
+              <Trash2 size={13} /> ล้างทั้งหมด
+            </button>
+          )}
+        </div>
         <div className="flex flex-wrap gap-2 mb-3">
           {periods.map((p) => (
             <button
@@ -1860,7 +1924,14 @@ function Requisitions({ requisitions, setRequisitions, items, setItems, user, pu
                     </div>
                     {r.note && <div className={`text-xs mt-1 italic ${dark ? "text-slate-400" : "text-slate-500"}`}>"{r.note}"</div>}
                   </div>
-                  <Badge status={r.status} />
+                  <div className="flex items-center gap-2 shrink-0">
+                    <Badge status={r.status} />
+                    {isAdmin && (
+                      <button onClick={() => deleteReq(r)} className="p-2 rounded-lg text-red-500 hover:bg-red-50" title="ลบและคืนสต็อก" aria-label="ลบรายการ">
+                        <Trash2 size={15} />
+                      </button>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
@@ -2206,6 +2277,48 @@ function PurchaseOrders({ purchaseOrders, setPurchaseOrders, items, setItems, us
   const openStatuses = ["pending_approval", "awaiting_order", "awaiting_supplier", "awaiting_import"];
   const totalOpenValue = scoped.filter((p) => openStatuses.includes(p.status)).reduce((s, p) => s + p.qty * p.unitPrice, 0);
 
+  // Admin: delete a PO. If it was already received, subtract the received qty back out of stock.
+  const undoReceived = (po) => {
+    if (po.status !== "received") return;
+    const cur = items.find((i) => i.id === po.itemId);
+    const newStock = Math.max(0, (cur ? cur.stock : 0) - po.qty);
+    if (db.cloud && cur) db.updateItem(po.itemId, { ...cur, stock: newStock }).catch(() => {});
+    setItems((prev) => prev.map((i) => (i.id === po.itemId ? { ...i, stock: Math.max(0, i.stock - po.qty) } : i)));
+  };
+  const deletePO = (po) => {
+    const willAdjust = po.status === "received";
+    confirm({
+      title: "ลบรายการสั่งซื้อนี้?",
+      message: willAdjust
+        ? `ลบ "${po.itemName}" × ${po.qty} — เนื่องจากรับของแล้ว จะหักสต็อก ${po.qty} ออกด้วย`
+        : `ลบ "${po.itemName}" × ${po.qty} ออกจากรายการ`,
+      confirmLabel: "ลบ",
+      tone: "danger",
+      onConfirm: () => {
+        undoReceived(po);
+        if (db.cloud) db.deletePO(po.id).catch(() => notify("error", "ลบไม่สำเร็จ"));
+        setPurchaseOrders((prev) => prev.filter((x) => x.id !== po.id));
+        notify("success", "ลบรายการสั่งซื้อแล้ว");
+      },
+    });
+  };
+  const clearPOs = () => {
+    if (sorted.length === 0) return;
+    confirm({
+      title: "ล้างรายการสั่งซื้อทั้งหมด?",
+      message: `จะลบ ${sorted.length} รายการที่แสดงอยู่ (รายการที่รับของแล้วจะหักสต็อกคืนด้วย)`,
+      confirmLabel: "ล้างทั้งหมด",
+      tone: "danger",
+      onConfirm: () => {
+        sorted.forEach(undoReceived);
+        const ids = sorted.map((p) => p.id);
+        if (db.cloud) db.clearPOs(ids).catch(() => notify("error", "ล้างไม่สำเร็จ"));
+        setPurchaseOrders((prev) => prev.filter((x) => !ids.includes(x.id)));
+        notify("success", "ล้างรายการสั่งซื้อแล้ว");
+      },
+    });
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
@@ -2230,6 +2343,14 @@ function PurchaseOrders({ purchaseOrders, setPurchaseOrders, items, setItems, us
               <Plus size={15} /> สั่งซื้อ
             </button>
           )}
+          {isAdmin && sorted.length > 0 && (
+            <button
+              onClick={clearPOs}
+              className="flex items-center gap-1.5 px-3 py-2.5 rounded-xl text-sm font-medium text-red-600 bg-red-50 hover:bg-red-100 transition-colors shrink-0"
+            >
+              <Trash2 size={14} /> ล้างทั้งหมด
+            </button>
+          )}
         </div>
       </div>
 
@@ -2241,8 +2362,13 @@ function PurchaseOrders({ purchaseOrders, setPurchaseOrders, items, setItems, us
             {sorted.map((po) => (
               <div key={po.id} className="px-5 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                 <div className="min-w-0">
-                  <div className={`font-medium text-sm ${dark ? "text-slate-100" : "text-slate-700"}`}>
-                    {po.itemName} <span className={dark ? "text-slate-500 font-normal" : "text-slate-400 font-normal"}>× {po.qty}</span>
+                  <div className={`font-medium text-sm flex items-center gap-2 ${dark ? "text-slate-100" : "text-slate-700"}`}>
+                    <span>{po.itemName} <span className={dark ? "text-slate-500 font-normal" : "text-slate-400 font-normal"}>× {po.qty}</span></span>
+                    {po.urgent && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-red-500 text-white">
+                        <AlertTriangle size={10} /> ด่วน
+                      </span>
+                    )}
                   </div>
                   <div className={`text-xs mt-0.5 ${dark ? "text-slate-500" : "text-slate-400"}`}>
                     ฿{fmtMoney(po.qty * po.unitPrice)} · {po.deptName || po.requestedBy}
@@ -2282,6 +2408,11 @@ function PurchaseOrders({ purchaseOrders, setPurchaseOrders, items, setItems, us
                   {(isAdmin && (po.status === "received" || po.status === "rejected")) && <Badge status={po.status} map={PO_STATUS} />}
                   {/* User: status only */}
                   {!isAdmin && <Badge status={po.status} map={PO_STATUS} />}
+                  {isAdmin && (
+                    <button onClick={() => deletePO(po)} className="p-2 rounded-lg text-red-500 hover:bg-red-50" title="ลบรายการ" aria-label="ลบรายการสั่งซื้อ">
+                      <Trash2 size={15} />
+                    </button>
+                  )}
                 </div>
               </div>
             ))}
@@ -2321,20 +2452,26 @@ function PurchaseOrders({ purchaseOrders, setPurchaseOrders, items, setItems, us
 
 function NewPOForm({ items, user, onSave, onClose, notify }) {
   const defaultDept = user.id === "admin" ? DEPARTMENTS[0].id : user.id;
+  // De-duplicate items by id (guards against any duplicate rows from sync)
+  const uniqueItems = React.useMemo(() => {
+    const seen = new Set();
+    return items.filter((i) => (seen.has(i.id) ? false : (seen.add(i.id), true)));
+  }, [items]);
   const [search, setSearch] = useState("");
-  const [itemId, setItemId] = useState(items[0]?.id || "");
+  const [itemId, setItemId] = useState(uniqueItems[0]?.id || "");
   const [qty, setQty] = useState("10");
   const [deptId, setDeptId] = useState(defaultDept);
   const [line, setLine] = useState("");
   const [machine, setMachine] = useState("");
   const [note, setNote] = useState("");
+  const [urgent, setUrgent] = useState(false);
   const [images, setImages] = useState([]); // {name, url} previews (not persisted yet)
-  const item = items.find((i) => i.id === itemId);
+  const item = uniqueItems.find((i) => i.id === itemId);
   const qtyNum = toNum(qty, NaN);
   const deptName = (DEPARTMENTS.find((d) => d.id === deptId) || {}).name || deptId;
   const valid = item && Number.isFinite(qtyNum) && qtyNum > 0 && line && machine;
 
-  const filtered = items.filter(
+  const filtered = uniqueItems.filter(
     (i) => i.name.toLowerCase().includes(search.toLowerCase()) || i.sku.toLowerCase().includes(search.toLowerCase())
   );
 
@@ -2352,7 +2489,7 @@ function NewPOForm({ items, user, onSave, onClose, notify }) {
     if (!line || !machine) { notify?.("error", "กรุณาเลือก Line และเครื่องจักร"); return; }
     onSave({
       itemId: item.id, itemName: item.name, qty: qtyNum, unitPrice: item.price,
-      deptId, deptName, line, machine, note: note.trim(),
+      deptId, deptName, line, machine, note: note.trim(), urgent,
       imageCount: images.length,
       files: images.map((im) => im.file).filter(Boolean),
     });
@@ -2377,14 +2514,25 @@ function NewPOForm({ items, user, onSave, onClose, notify }) {
                   className="w-full pl-9 pr-3 py-2.5 rounded-lg border border-slate-200 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[#1E3A5F]/20"
                 />
               </div>
-              <select
-                value={itemId}
-                onChange={(e) => setItemId(e.target.value)}
-                size={Math.min(4, Math.max(2, filtered.length))}
-                className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm text-slate-800 bg-white focus:outline-none focus:ring-2 focus:ring-[#1E3A5F]/20"
-              >
-                {filtered.map((i) => <option key={i.id} value={i.id} className="text-slate-800">{i.name} ({i.sku}) — คงเหลือ {i.stock}</option>)}
-              </select>
+              <div className="max-h-40 overflow-y-auto rounded-lg border border-slate-200 divide-y divide-slate-100">
+                {filtered.length === 0 ? (
+                  <div className="px-3 py-3 text-sm text-slate-400">ไม่พบสินค้า</div>
+                ) : (
+                  filtered.map((i) => (
+                    <button
+                      key={i.id}
+                      type="button"
+                      onClick={() => setItemId(i.id)}
+                      className={`w-full text-left px-3 py-2.5 text-sm flex items-center justify-between gap-2 transition-colors ${
+                        i.id === itemId ? "bg-[#1E3A5F] text-white" : "text-slate-700 hover:bg-slate-50"
+                      }`}
+                    >
+                      <span className="min-w-0 truncate">{i.name} <span className={i.id === itemId ? "text-white/70" : "text-slate-400"}>({i.sku})</span></span>
+                      <span className={`shrink-0 text-xs ${i.id === itemId ? "text-white/80" : "text-slate-400"}`}>คงเหลือ {i.stock}</span>
+                    </button>
+                  ))
+                )}
+              </div>
             </div>
 
             <Field label="จำนวนที่สั่ง" type="number" value={qty} onChange={setQty} />
@@ -2393,6 +2541,23 @@ function NewPOForm({ items, user, onSave, onClose, notify }) {
             )}
 
             <DeptLineMachineFields user={user} deptId={deptId} setDeptId={setDeptId} line={line} setLine={setLine} machine={machine} setMachine={setMachine} />
+
+            {/* Urgent order toggle */}
+            <button
+              type="button"
+              onClick={() => setUrgent((v) => !v)}
+              className={`w-full flex items-center justify-between gap-2 px-3.5 py-3 rounded-xl border transition-colors ${
+                urgent ? "bg-red-50 border-red-300" : "bg-white border-slate-200 hover:bg-slate-50"
+              }`}
+            >
+              <span className="flex items-center gap-2">
+                <AlertTriangle size={16} className={urgent ? "text-red-500" : "text-slate-400"} />
+                <span className={`text-sm font-medium ${urgent ? "text-red-600" : "text-slate-600"}`}>สั่งซื้อด่วน (Urgent)</span>
+              </span>
+              <span className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${urgent ? "bg-red-500" : "bg-slate-300"}`}>
+                <span className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform ${urgent ? "translate-x-5" : "translate-x-0.5"}`} />
+              </span>
+            </button>
 
             {/* Image attach — up to 3 (preview only, will persist after Supabase) */}
             <div>
