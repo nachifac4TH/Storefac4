@@ -2458,6 +2458,8 @@ function NewPOForm({ items, user, onSave, onClose, notify }) {
     return items.filter((i) => (seen.has(i.id) ? false : (seen.add(i.id), true)));
   }, [items]);
   const [search, setSearch] = useState("");
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const pickerRef = React.useRef(null);
   const [itemId, setItemId] = useState(uniqueItems[0]?.id || "");
   const [qty, setQty] = useState("10");
   const [deptId, setDeptId] = useState(defaultDept);
@@ -2471,9 +2473,22 @@ function NewPOForm({ items, user, onSave, onClose, notify }) {
   const deptName = (DEPARTMENTS.find((d) => d.id === deptId) || {}).name || deptId;
   const valid = item && Number.isFinite(qtyNum) && qtyNum > 0 && line && machine;
 
+  // Close the item dropdown when clicking outside
+  useEffect(() => {
+    const onDoc = (e) => { if (pickerRef.current && !pickerRef.current.contains(e.target)) setPickerOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, []);
+
+  // When dropdown is open, filter by typed text; when closed, show the selected item name
   const filtered = uniqueItems.filter(
     (i) => i.name.toLowerCase().includes(search.toLowerCase()) || i.sku.toLowerCase().includes(search.toLowerCase())
   );
+  const selectItem = (i) => {
+    setItemId(i.id);
+    setSearch("");
+    setPickerOpen(false);
+  };
 
   const onPickImages = (e) => {
     const files = Array.from(e.target.files || []).slice(0, 3 - images.length);
@@ -2503,34 +2518,37 @@ function NewPOForm({ items, user, onSave, onClose, notify }) {
           <p className="text-sm text-slate-500 mb-4">ยังไม่มีสินค้าสำหรับแผนกนี้ กรุณาให้แอดมินเพิ่มสินค้าก่อน</p>
         ) : (
           <div className="space-y-3">
-            <div>
+            <div ref={pickerRef}>
               <span className="text-xs text-slate-500 mb-1 block">ค้นหา / เลือกสินค้า</span>
-              <div className="relative mb-2">
+              <div className="relative">
                 <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                 <input
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
+                  value={pickerOpen ? search : (item ? `${item.name} (${item.sku})` : "")}
+                  onChange={(e) => { setSearch(e.target.value); if (!pickerOpen) setPickerOpen(true); }}
+                  onFocus={() => { setPickerOpen(true); setSearch(""); }}
                   placeholder="พิมพ์ชื่อสินค้า หรือ SKU"
                   className="w-full pl-9 pr-3 py-2.5 rounded-lg border border-slate-200 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[#1E3A5F]/20"
                 />
-              </div>
-              <div className="max-h-40 overflow-y-auto rounded-lg border border-slate-200 divide-y divide-slate-100">
-                {filtered.length === 0 ? (
-                  <div className="px-3 py-3 text-sm text-slate-400">ไม่พบสินค้า</div>
-                ) : (
-                  filtered.map((i) => (
-                    <button
-                      key={i.id}
-                      type="button"
-                      onClick={() => setItemId(i.id)}
-                      className={`w-full text-left px-3 py-2.5 text-sm flex items-center justify-between gap-2 transition-colors ${
-                        i.id === itemId ? "bg-[#1E3A5F] text-white" : "text-slate-700 hover:bg-slate-50"
-                      }`}
-                    >
-                      <span className="min-w-0 truncate">{i.name} <span className={i.id === itemId ? "text-white/70" : "text-slate-400"}>({i.sku})</span></span>
-                      <span className={`shrink-0 text-xs ${i.id === itemId ? "text-white/80" : "text-slate-400"}`}>คงเหลือ {i.stock}</span>
-                    </button>
-                  ))
+                {pickerOpen && (
+                  <div className="absolute z-30 mt-1 w-full max-h-44 overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg divide-y divide-slate-100">
+                    {filtered.length === 0 ? (
+                      <div className="px-3 py-3 text-sm text-slate-400">ไม่พบสินค้า</div>
+                    ) : (
+                      filtered.map((i) => (
+                        <button
+                          key={i.id}
+                          type="button"
+                          onClick={() => selectItem(i)}
+                          className={`w-full text-left px-3 py-2.5 text-sm flex items-center justify-between gap-2 transition-colors ${
+                            i.id === itemId ? "bg-[#1E3A5F] text-white" : "text-slate-700 hover:bg-slate-50"
+                          }`}
+                        >
+                          <span className="min-w-0 truncate">{i.name} <span className={i.id === itemId ? "text-white/70" : "text-slate-400"}>({i.sku})</span></span>
+                          <span className={`shrink-0 text-xs ${i.id === itemId ? "text-white/80" : "text-slate-400"}`}>คงเหลือ {i.stock}</span>
+                        </button>
+                      ))
+                    )}
+                  </div>
                 )}
               </div>
             </div>
