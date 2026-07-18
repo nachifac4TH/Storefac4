@@ -366,25 +366,30 @@ const db = {
     const { error } = await sb.rpc("receive_po", { p_po_id: id });
     if (error) throw error;
   },
+  // Deletes return the removed rows so we can detect RLS blocking (0 rows = not permitted)
   async deleteRequisition(id) {
     if (!CLOUD) return null;
-    const { error } = await sb.from("requisitions").delete().eq("id", id);
+    const { data, error } = await sb.from("requisitions").delete().eq("id", id).select("id");
     if (error) throw error;
+    if (!data || data.length === 0) throw new Error("ไม่มีสิทธิ์ลบ (RLS)");
   },
   async deletePO(id) {
     if (!CLOUD) return null;
-    const { error } = await sb.from("purchase_orders").delete().eq("id", id);
+    const { data, error } = await sb.from("purchase_orders").delete().eq("id", id).select("id");
     if (error) throw error;
+    if (!data || data.length === 0) throw new Error("ไม่มีสิทธิ์ลบ (RLS)");
   },
   async clearRequisitions(ids) {
     if (!CLOUD) return null;
-    const { error } = await sb.from("requisitions").delete().in("id", ids);
+    const { data, error } = await sb.from("requisitions").delete().in("id", ids).select("id");
     if (error) throw error;
+    if (!data || data.length === 0) throw new Error("ไม่มีสิทธิ์ลบ (RLS)");
   },
   async clearPOs(ids) {
     if (!CLOUD) return null;
-    const { error } = await sb.from("purchase_orders").delete().in("id", ids);
+    const { data, error } = await sb.from("purchase_orders").delete().in("id", ids).select("id");
     if (error) throw error;
+    if (!data || data.length === 0) throw new Error("ไม่มีสิทธิ์ลบ (RLS)");
   },
 
   // ---------- Auth (cloud only) ----------
@@ -1766,7 +1771,7 @@ function Requisitions({ requisitions, setRequisitions, items, setItems, user, pu
       tone: "danger",
       onConfirm: () => {
         returnStock(r);
-        if (db.cloud) db.deleteRequisition(r.id).catch(() => notify("error", "ลบไม่สำเร็จ"));
+        if (db.cloud) db.deleteRequisition(r.id).catch((e) => notify("error", "ลบไม่สำเร็จ: " + (e && e.message ? e.message : "")));
         setRequisitions((prev) => prev.filter((x) => x.id !== r.id));
         notify("success", "ลบรายการและคืนสต็อกแล้ว");
       },
@@ -1782,7 +1787,7 @@ function Requisitions({ requisitions, setRequisitions, items, setItems, user, pu
       onConfirm: () => {
         list.forEach(returnStock);
         const ids = list.map((r) => r.id);
-        if (db.cloud) db.clearRequisitions(ids).catch(() => notify("error", "ล้างไม่สำเร็จ"));
+        if (db.cloud) db.clearRequisitions(ids).catch((e) => notify("error", "ล้างไม่สำเร็จ: " + (e && e.message ? e.message : "")));
         setRequisitions((prev) => prev.filter((x) => !ids.includes(x.id)));
         notify("success", "ล้างประวัติและคืนสต็อกแล้ว");
       },
@@ -2304,7 +2309,7 @@ function PurchaseOrders({ purchaseOrders, setPurchaseOrders, items, setItems, us
       tone: "danger",
       onConfirm: () => {
         undoReceived(po);
-        if (db.cloud) db.deletePO(po.id).catch(() => notify("error", "ลบไม่สำเร็จ"));
+        if (db.cloud) db.deletePO(po.id).catch((e) => notify("error", "ลบไม่สำเร็จ: " + (e && e.message ? e.message : "")));
         setPurchaseOrders((prev) => prev.filter((x) => x.id !== po.id));
         notify("success", "ลบรายการสั่งซื้อแล้ว");
       },
@@ -2320,7 +2325,7 @@ function PurchaseOrders({ purchaseOrders, setPurchaseOrders, items, setItems, us
       onConfirm: () => {
         sorted.forEach(undoReceived);
         const ids = sorted.map((p) => p.id);
-        if (db.cloud) db.clearPOs(ids).catch(() => notify("error", "ล้างไม่สำเร็จ"));
+        if (db.cloud) db.clearPOs(ids).catch((e) => notify("error", "ล้างไม่สำเร็จ: " + (e && e.message ? e.message : "")));
         setPurchaseOrders((prev) => prev.filter((x) => !ids.includes(x.id)));
         notify("success", "ล้างรายการสั่งซื้อแล้ว");
       },
