@@ -805,28 +805,36 @@ function Login({ onLogin, session, onSignedIn, notify }) {
       <div className="absolute inset-0" style={{ background: "radial-gradient(120% 90% at 50% 0%, rgba(13,59,69,0.5), rgba(6,26,40,0.85))" }} />
 
       <div className="w-full max-w-3xl relative z-10">
-        <div className="mb-6 sm:mb-8">
-          <div className="flex items-center gap-3.5">
+        <div className="mb-7 sm:mb-9">
+          <div className="flex items-center gap-3 mb-3.5">
             <div
-              className="h-11 sm:h-12 flex items-center px-3 rounded-2xl shrink-0"
+              className="h-12 sm:h-14 flex items-center px-3.5 rounded-2xl shrink-0"
               style={{
-                background: "rgba(255,255,255,0.92)",
-                boxShadow: "0 8px 24px -8px rgba(0,0,0,0.4), inset 0 1px 1px rgba(255,255,255,0.6)",
+                background: "#ffffff",
+                boxShadow: "0 10px 30px -10px rgba(0,0,0,0.55), inset 0 1px 1px rgba(255,255,255,0.8)",
               }}
             >
               <img src={NACHI_LOGO} alt="NACHI" className="h-5 sm:h-6 w-auto" />
             </div>
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] font-semibold tracking-[0.35em] text-white/45 uppercase">Factory 4</span>
-                <span className="h-px w-8 bg-gradient-to-r from-[#7FD4A8]/60 to-transparent" />
-              </div>
-              <h1 className="text-white text-2xl sm:text-[28px] font-semibold tracking-tight leading-tight mt-0.5">
-                Store <span className="font-light text-white/85">Engineering</span>
-                <span className="text-[#7FD4A8] font-normal text-lg sm:text-xl align-middle ml-2">· ยินดีต้อนรับ</span>
-              </h1>
-            </div>
+            <span
+              className="inline-flex items-center px-3 py-1.5 rounded-full text-[11px] sm:text-xs font-bold tracking-[0.22em] uppercase text-[#A7E8C6]"
+              style={{ background: "rgba(127,212,168,0.16)", border: "1px solid rgba(127,212,168,0.38)" }}
+            >
+              Factory 4
+            </span>
           </div>
+          <h1
+            className="text-white text-[30px] sm:text-[40px] font-bold tracking-tight leading-[1.12]"
+            style={{ textShadow: "0 2px 16px rgba(0,0,0,0.55)" }}
+          >
+            Store <span className="font-light text-white/90">Engineering</span>
+          </h1>
+          <p
+            className="text-[#7FD4A8] text-base sm:text-xl font-semibold mt-2"
+            style={{ textShadow: "0 2px 12px rgba(0,0,0,0.5)" }}
+          >
+            ยินดีต้อนรับ · เลือกแผนกของคุณ
+          </p>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-5">
           {cards.map((c) => (
@@ -2784,8 +2792,11 @@ function App() {
                 <img src={NACHI_LOGO} alt="NACHI" className="h-4 w-auto" />
               </div>
               <div className="text-left leading-none hidden sm:block">
-                <div className="text-[10px] text-slate-400 tracking-widest uppercase mb-1">Factory 4</div>
-                <div className="font-semibold text-sm tracking-tight">Store Engineering</div>
+                <div className="inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-bold tracking-[0.18em] uppercase text-[#A7E8C6] mb-1.5"
+                     style={{ background: "rgba(127,212,168,0.15)", border: "1px solid rgba(127,212,168,0.3)" }}>
+                  Factory 4
+                </div>
+                <div className="font-bold text-[15px] tracking-tight text-white">Store Engineering</div>
               </div>
             </button>
 
