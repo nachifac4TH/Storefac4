@@ -21,7 +21,6 @@
     #qr-reader { border: none !important; }
     #qr-reader__dashboard_section_csr button { display: none; }
     select option { color: #1e293b; background: #ffffff; }
-    /* hide scrollbar on the horizontal tab strip */
     .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
     .no-scrollbar::-webkit-scrollbar { display: none; }
   </style>
@@ -2695,6 +2694,31 @@ function App() {
     const unsub = db.subscribe(() => { clearTimeout(t); t = setTimeout(() => reload(), 250); });
     return () => { clearTimeout(t); unsub(); };
   }, [reload, session]);
+
+  // Keep data fresh: poll periodically + refresh when returning to the app.
+  // (Backup for realtime, which can drop after sleep / network changes.)
+  useEffect(() => {
+    if (!db.cloud) return;
+    const REFRESH_MS = 20000;
+    const tick = setInterval(() => {
+      if (typeof document === "undefined" || document.visibilityState !== "hidden") reload();
+    }, REFRESH_MS);
+    const onVisible = () => { if (document.visibilityState === "visible") reload(); };
+    const onOnline = () => reload();
+    try {
+      document.addEventListener("visibilitychange", onVisible);
+      window.addEventListener("focus", onVisible);
+      window.addEventListener("online", onOnline);
+    } catch (e) {}
+    return () => {
+      clearInterval(tick);
+      try {
+        document.removeEventListener("visibilitychange", onVisible);
+        window.removeEventListener("focus", onVisible);
+        window.removeEventListener("online", onOnline);
+      } catch (e) {}
+    };
+  }, [reload]);
 
   // Debounced local persistence (only when Supabase is NOT configured)
   useEffect(() => {
