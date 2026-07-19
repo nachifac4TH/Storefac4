@@ -2791,11 +2791,14 @@ function App() {
               <div className="h-9 flex items-center px-2.5 rounded-xl bg-white shrink-0 shadow-sm">
                 <img src={NACHI_LOGO} alt="NACHI" className="h-4 w-auto" />
               </div>
-              <div className="text-left leading-none hidden sm:block">
-                <div className="inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-bold tracking-[0.18em] uppercase text-[#A7E8C6] mb-1.5"
-                     style={{ background: "rgba(127,212,168,0.15)", border: "1px solid rgba(127,212,168,0.3)" }}>
-                  Factory 4
-                </div>
+              {/* Factory 4 badge — always visible */}
+              <span
+                className="inline-flex items-center px-2 sm:px-2.5 py-1 rounded-full text-[9px] sm:text-[10px] font-bold tracking-[0.16em] uppercase text-[#A7E8C6] shrink-0"
+                style={{ background: "rgba(127,212,168,0.15)", border: "1px solid rgba(127,212,168,0.32)" }}
+              >
+                Factory 4
+              </span>
+              <div className="text-left leading-none hidden md:block">
                 <div className="font-bold text-[15px] tracking-tight text-white">Store Engineering</div>
               </div>
             </button>
