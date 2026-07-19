@@ -2517,6 +2517,11 @@ function PurchaseOrders({ purchaseOrders, setPurchaseOrders, items, setItems, us
                         <AlertTriangle size={10} /> ด่วน
                       </span>
                     )}
+                    {!po.itemId && (
+                      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold ${dark ? "bg-amber-500/20 text-amber-300" : "bg-amber-100 text-amber-700"}`}>
+                        นอกรายการ
+                      </span>
+                    )}
                   </div>
                   <div className={`text-xs mt-0.5 ${dark ? "text-slate-500" : "text-slate-400"}`}>
                     ฿{fmtMoney(po.qty * po.unitPrice)} · {po.deptName || po.requestedBy}
@@ -2669,11 +2674,18 @@ function NewPOForm({ items, user, onSave, onClose, notify }) {
   const [machine, setMachine] = useState("");
   const [note, setNote] = useState("");
   const [urgent, setUrgent] = useState(false);
-  const [images, setImages] = useState([]); // {name, url} previews (not persisted yet)
+  const [images, setImages] = useState([]); // {name, url, file} previews
+  // Off-catalog order: part seen on the machine but not in the item list yet
+  const [customMode, setCustomMode] = useState(false);
+  const [customName, setCustomName] = useState("");
+  const [customPrice, setCustomPrice] = useState("");
   const item = uniqueItems.find((i) => i.id === itemId);
   const qtyNum = toNum(qty, NaN);
   const deptName = (DEPARTMENTS.find((d) => d.id === deptId) || {}).name || deptId;
-  const valid = item && Number.isFinite(qtyNum) && qtyNum > 0 && line && machine;
+  const priceNum = customMode ? toNum(customPrice, 0) : (item ? item.price : 0);
+  const valid = customMode
+    ? customName.trim().length > 0 && Number.isFinite(qtyNum) && qtyNum > 0 && line && machine && images.length > 0
+    : item && Number.isFinite(qtyNum) && qtyNum > 0 && line && machine;
 
   // Close the item dropdown when clicking outside
   useEffect(() => {
@@ -2701,11 +2713,19 @@ function NewPOForm({ items, user, onSave, onClose, notify }) {
   const removeImage = (idx) => setImages((prev) => prev.filter((_, i) => i !== idx));
 
   const handleSave = () => {
-    if (!item) { notify?.("error", "กรุณาเลือกสินค้า"); return; }
+    if (customMode) {
+      if (!customName.trim()) { notify?.("error", "กรุณากรอกชื่อ/รายละเอียดสินค้า"); return; }
+      if (images.length === 0) { notify?.("error", "สินค้านอกรายการต้องแนบรูปอย่างน้อย 1 ภาพ"); return; }
+    } else if (!item) {
+      notify?.("error", "กรุณาเลือกสินค้า"); return;
+    }
     if (!Number.isFinite(qtyNum) || qtyNum <= 0) { notify?.("error", "จำนวนที่สั่งต้องมากกว่า 0"); return; }
     if (!line || !machine) { notify?.("error", "กรุณาเลือก Line และเครื่องจักร"); return; }
     onSave({
-      itemId: item.id, itemName: item.name, qty: qtyNum, unitPrice: item.price,
+      itemId: customMode ? null : item.id,
+      itemName: customMode ? customName.trim() : item.name,
+      qty: qtyNum,
+      unitPrice: priceNum,
       deptId, deptName, line, machine, note: note.trim(), urgent,
       imageCount: images.length,
       files: images.map((im) => im.file).filter(Boolean),
@@ -2716,8 +2736,38 @@ function NewPOForm({ items, user, onSave, onClose, notify }) {
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={onClose}>
       <div className="bg-white rounded-2xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <h3 className="font-semibold text-slate-800 mb-4">สั่งซื้อสินค้า</h3>
-        {items.length === 0 ? (
-          <p className="text-sm text-slate-500 mb-4">ยังไม่มีสินค้าสำหรับแผนกนี้ กรุณาให้แอดมินเพิ่มสินค้าก่อน</p>
+
+        {/* Mode switch: pick from catalog vs order a part not in the system */}
+        <div className="flex gap-2 mb-4 p-1 rounded-xl bg-slate-100">
+          <button
+            type="button"
+            onClick={() => setCustomMode(false)}
+            className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${!customMode ? "bg-white text-[#1E3A5F] shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
+          >
+            เลือกจากคลัง
+          </button>
+          <button
+            type="button"
+            onClick={() => setCustomMode(true)}
+            className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${customMode ? "bg-white text-[#1E3A5F] shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
+          >
+            ของนอกรายการ
+          </button>
+        </div>
+
+        {customMode ? (
+          <div className="space-y-3">
+            <div className="flex items-start gap-2 p-3 rounded-xl bg-amber-50 border border-amber-200">
+              <AlertTriangle size={16} className="text-amber-500 shrink-0 mt-0.5" />
+              <p className="text-xs text-amber-800 leading-relaxed">
+                สำหรับอะไหล่ที่ยังไม่มีในคลัง — กรอกชื่อ/รายละเอียดเท่าที่ทราบ แล้ว<b>ถ่ายรูปของจริงที่เครื่องจักรแนบมาด้วย</b> เพื่อให้แอดมินสั่งซื้อได้ถูกต้อง
+              </p>
+            </div>
+            <Field label="ชื่อ / รายละเอียดสินค้า" value={customName} onChange={setCustomName} />
+            <Field label="ราคาต่อหน่วยโดยประมาณ (ถ้าทราบ)" type="number" value={customPrice} onChange={setCustomPrice} />
+          </div>
+        ) : items.length === 0 ? (
+          <p className="text-sm text-slate-500 mb-4">ยังไม่มีสินค้าสำหรับแผนกนี้ — ใช้แท็บ "ของนอกรายการ" เพื่อสั่งพร้อมแนบรูปได้</p>
         ) : (
           <div className="space-y-3">
             <div ref={pickerRef}>
@@ -2754,10 +2804,14 @@ function NewPOForm({ items, user, onSave, onClose, notify }) {
                 )}
               </div>
             </div>
+          </div>
+        )}
 
+        {(customMode || items.length > 0) && (
+          <div className="space-y-3 mt-3">
             <Field label="จำนวนที่สั่ง" type="number" value={qty} onChange={setQty} />
-            {item && Number.isFinite(qtyNum) && qtyNum > 0 && (
-              <div className="text-xs text-slate-400">ราคา/หน่วย ฿{fmtMoney(item.price)} · รวม ฿{fmtMoney(item.price * qtyNum)}</div>
+            {Number.isFinite(qtyNum) && qtyNum > 0 && priceNum > 0 && (
+              <div className="text-xs text-slate-400">ราคา/หน่วย ฿{fmtMoney(priceNum)} · รวม ฿{fmtMoney(priceNum * qtyNum)}</div>
             )}
 
             <DeptLineMachineFields user={user} deptId={deptId} setDeptId={setDeptId} line={line} setLine={setLine} machine={machine} setMachine={setMachine} />
