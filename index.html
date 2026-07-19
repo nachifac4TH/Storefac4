@@ -283,13 +283,20 @@ const db = {
 
   subscribe(onChange) {
     if (!CLOUD) return () => {};
-    const ch = sb
-      .channel("store-changes")
-      .on("postgres_changes", { event: "*", schema: "public", table: "items" }, onChange)
-      .on("postgres_changes", { event: "*", schema: "public", table: "requisitions" }, onChange)
-      .on("postgres_changes", { event: "*", schema: "public", table: "purchase_orders" }, onChange)
-      .subscribe();
-    return () => { try { sb.removeChannel(ch); } catch (e) {} };
+    // Realtime uses WebSocket, which some sandboxes / corporate networks block.
+    // If it fails we degrade gracefully — the polling refresh keeps data current.
+    try {
+      const ch = sb
+        .channel("store-changes")
+        .on("postgres_changes", { event: "*", schema: "public", table: "items" }, onChange)
+        .on("postgres_changes", { event: "*", schema: "public", table: "requisitions" }, onChange)
+        .on("postgres_changes", { event: "*", schema: "public", table: "purchase_orders" }, onChange)
+        .subscribe();
+      return () => { try { sb.removeChannel(ch); } catch (e) {} };
+    } catch (e) {
+      console.warn("Realtime unavailable, falling back to periodic refresh:", e);
+      return () => {};
+    }
   },
 
   // Items
@@ -1691,12 +1698,35 @@ function Requisitions({ requisitions, setRequisitions, items, setItems, user, pu
   const [scanning, setScanning] = useState(false);
   const [period, setPeriod] = useState("all"); // all | day | month | year
   const [deptFilter, setDeptFilter] = useState("all");
+  const [category, setCategory] = useState("all");
   const isAdmin = user.id === "admin";
   const myItems = visibleItems(items, user);
 
-  const catalog = myItems.filter(
-    (i) => i.name.toLowerCase().includes(search.toLowerCase()) || i.sku.toLowerCase().includes(search.toLowerCase())
-  );
+  // Categories present in this department's catalog, most-used first
+  const categories = React.useMemo(() => {
+    const count = {};
+    myItems.forEach((i) => { const c = (i.category || "ทั่วไป").trim(); count[c] = (count[c] || 0) + 1; });
+    return Object.entries(count).sort((a, b) => b[1] - a[1]).map(([name, n]) => ({ name, n }));
+  }, [myItems]);
+
+  // "Frequently ordered" — most withdrawn items by this department
+  const frequentItems = React.useMemo(() => {
+    const mine = requisitions.filter((r) => isAdmin || r.deptId === user.id);
+    const count = {};
+    mine.forEach((r) => { if (r.itemId) count[r.itemId] = (count[r.itemId] || 0) + r.qty; });
+    return Object.entries(count)
+      .sort((a, b) => b[1] - a[1])
+      .map(([id]) => myItems.find((i) => i.id === id))
+      .filter((i) => i && i.stock > 0)
+      .slice(0, 6);
+  }, [requisitions, myItems, user, isAdmin]);
+
+  const catalog = myItems.filter((i) => {
+    const q = search.toLowerCase();
+    const matchText = i.name.toLowerCase().includes(q) || i.sku.toLowerCase().includes(q);
+    const matchCat = category === "all" || (i.category || "ทั่วไป").trim() === category;
+    return matchText && matchCat;
+  });
 
   const handleScan = (raw) => {
     const code = (raw || "").trim();
@@ -1831,6 +1861,65 @@ function Requisitions({ requisitions, setRequisitions, items, setItems, user, pu
                 <span className="hidden sm:inline">สแกน</span>
               </button>
             </div>
+
+            {/* Frequently ordered — quick repeat for the production line */}
+            {frequentItems.length > 0 && !search && category === "all" && (
+              <div className="mt-3.5">
+                <div className={`text-xs font-medium mb-2 flex items-center gap-1.5 ${dark ? "text-slate-300" : "text-slate-600"}`}>
+                  <Clock size={13} /> สั่งบ่อย
+                </div>
+                <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
+                  {frequentItems.map((i) => (
+                    <button
+                      key={i.id}
+                      onClick={() => setPickedItem(i)}
+                      className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs whitespace-nowrap shrink-0 border transition-colors ${
+                        dark
+                          ? "bg-white/[0.06] border-white/10 text-slate-100 hover:bg-white/[0.12]"
+                          : "bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100"
+                      }`}
+                    >
+                      <span className="font-medium max-w-[140px] truncate">{i.name}</span>
+                      <span className={dark ? "text-slate-400" : "text-slate-400"}>·</span>
+                      <span className="text-emerald-500 font-semibold">{i.stock}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Category filter */}
+            {categories.length > 1 && (
+              <div className="mt-3 flex gap-2 overflow-x-auto no-scrollbar pb-1">
+                <button
+                  onClick={() => setCategory("all")}
+                  className={`px-3.5 py-1.5 rounded-full text-xs font-medium whitespace-nowrap shrink-0 transition-colors ${
+                    category === "all"
+                      ? "bg-[#1E3A5F] text-white"
+                      : dark
+                        ? "bg-white/[0.06] text-slate-300 hover:bg-white/[0.12]"
+                        : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                  }`}
+                >
+                  ทั้งหมด ({myItems.length})
+                </button>
+                {categories.map((c) => (
+                  <button
+                    key={c.name}
+                    onClick={() => setCategory(c.name)}
+                    className={`px-3.5 py-1.5 rounded-full text-xs font-medium whitespace-nowrap shrink-0 transition-colors ${
+                      category === c.name
+                        ? "bg-[#1E3A5F] text-white"
+                        : dark
+                          ? "bg-white/[0.06] text-slate-300 hover:bg-white/[0.12]"
+                          : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                    }`}
+                  >
+                    {c.name} ({c.n})
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
           {catalog.length === 0 ? (
             <EmptyState icon={Package} title={search ? "ไม่พบสินค้า" : "ยังไม่มีสินค้าสำหรับแผนกนี้"} sub={search ? "ลองค้นหาด้วยคำอื่น" : "แอดมินสามารถเพิ่มสินค้าให้แผนกได้"} />
@@ -1866,11 +1955,20 @@ function Requisitions({ requisitions, setRequisitions, items, setItems, user, pu
                           {!out && low && <AlertTriangle size={15} className="text-amber-500 shrink-0" />}
                         </div>
                         <div className="mt-2.5">
-                          <div className="flex items-center justify-between mb-1">
-                            <span className={`text-xs font-semibold ${out ? "text-red-400" : low ? "text-amber-400" : dark ? "text-emerald-400" : "text-slate-700"}`}>
-                              คงเหลือ {i.stock} {i.unit}
+                          <div className="flex items-center justify-between gap-2 mb-1.5">
+                            <span
+                              className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-[11px] font-semibold ${
+                                out
+                                  ? dark ? "bg-red-500/15 text-red-300" : "bg-red-50 text-red-700"
+                                  : low
+                                    ? dark ? "bg-amber-500/15 text-amber-300" : "bg-amber-50 text-amber-700"
+                                    : dark ? "bg-emerald-500/15 text-emerald-300" : "bg-emerald-50 text-emerald-700"
+                              }`}
+                            >
+                              <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: barColor }} />
+                              {out ? "ของหมด" : low ? `ใกล้หมด · เหลือ ${i.stock}` : `มีของ · ${i.stock} ${i.unit}`}
                             </span>
-                            {out ? <span className="text-xs text-red-400">หมดสต็อก</span> : <span className={`text-xs font-medium ${dark ? "text-[#7FD4A8]" : "text-[#1E3A5F]"}`}>เบิก →</span>}
+                            {!out && <span className={`text-xs font-semibold shrink-0 ${dark ? "text-[#7FD4A8]" : "text-[#1E3A5F]"}`}>เบิก →</span>}
                           </div>
                           <div className={`h-1.5 rounded-full overflow-hidden ${dark ? "bg-white/10" : "bg-slate-100"}`}>
                             <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, background: barColor }} />
@@ -2673,7 +2771,10 @@ function App() {
   useEffect(() => {
     if (!CLOUD) return;
     let sub;
-    db.getSession().then((s) => { setSession(s); setAuthReady(true); });
+    db.getSession()
+      .then((s) => { setSession(s); })
+      .catch((e) => { console.warn("getSession failed:", e); })
+      .finally(() => setAuthReady(true));
     try {
       const r = sb.auth.onAuthStateChange((_e, s) => setSession(s));
       sub = r && r.data ? r.data.subscription : null;
@@ -2682,11 +2783,16 @@ function App() {
   }, []);
 
   const reload = useCallback(async () => {
-    const data = await db.loadAll();
-    setItems(data.items);
-    setRequisitions(data.requisitions);
-    setPurchaseOrders(data.purchaseOrders);
-    setLoaded(true);
+    try {
+      const data = await db.loadAll();
+      setItems(data.items);
+      setRequisitions(data.requisitions);
+      setPurchaseOrders(data.purchaseOrders);
+    } catch (e) {
+      console.warn("loadAll failed:", e);
+    } finally {
+      setLoaded(true);
+    }
   }, []);
 
   useEffect(() => {
