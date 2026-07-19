@@ -34,6 +34,7 @@
 </head>
 <body>
   <div id="root"></div>
+  <noscript><div style="padding:24px;font-family:sans-serif">กรุณาเปิดใช้งาน JavaScript เพื่อใช้แอปนี้</div></noscript>
   <script type="text/babel" data-presets="react">
     const { useState, useEffect, useCallback } = React;
     const ICON_SVG = {
@@ -2988,10 +2989,8 @@ function App() {
     if (CLOUD) db.signOut().then(() => setSession(null));
   }, []);
 
-  if (CLOUD && !authReady) {
-    return <div className="min-h-screen flex items-center justify-center" style={{ background: "#0a1628" }}><div className="text-slate-300 text-sm">กำลังโหลด...</div></div>;
-  }
-
+  // Never block the first paint on the network: departments can use the app
+  // without a session, and the admin login modal handles the session itself.
   if (!user) return <Login onLogin={setUser} session={session} onSignedIn={setSession} notify={notify} />;
 
   const isAdmin = user.id === "admin";
