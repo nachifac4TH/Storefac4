@@ -352,6 +352,24 @@ const db = {
     }
     return urls;
   },
+  async deleteImages(urls) {
+    if (!CLOUD || !urls || urls.length === 0) return;
+    // Public URL looks like .../storage/v1/object/public/po-images/<path>
+    const paths = urls
+      .map((u) => {
+        const marker = "/po-images/";
+        const i = String(u).indexOf(marker);
+        return i === -1 ? null : decodeURIComponent(String(u).slice(i + marker.length));
+      })
+      .filter(Boolean);
+    if (paths.length === 0) return;
+    try { await sb.storage.from("po-images").remove(paths); } catch (e) { console.warn("delete images failed:", e); }
+  },
+  async clearPOImages(id) {
+    if (!CLOUD) return;
+    try { await sb.from("purchase_orders").update({ image_urls: [] }).eq("id", id); }
+    catch (e) { console.warn("clear image_urls failed:", e); }
+  },
   async createPO(po) {
     if (!CLOUD) return null;
     const row = {
@@ -2326,6 +2344,7 @@ function RequisitionDetail({ item, user, onSubmit, onClose, notify }) {
 function PurchaseOrders({ purchaseOrders, setPurchaseOrders, items, setItems, user, notify, confirm, dark }) {
   const [showNew, setShowNew] = useState(false);
   const [search, setSearch] = useState("");
+  const [previewImg, setPreviewImg] = useState(null); // { urls, index, title }
   const isAdmin = user.id === "admin";
   const card = dark ? "bg-white/[0.03] border-white/10" : "bg-white border-slate-100";
   const rowDivide = dark ? "divide-white/5" : "divide-slate-50";
@@ -2368,7 +2387,19 @@ function PurchaseOrders({ purchaseOrders, setPurchaseOrders, items, setItems, us
       message: `รับ "${po.itemName}" จำนวน ${po.qty} เข้าสต็อกใช่หรือไม่`,
       confirmLabel: "รับของ",
       onConfirm: () => {
-        if (db.cloud) { db.receivePO(po.id).then(() => notify("success", "รับของเข้าคลังแล้ว")).catch(() => notify("error", "รับของไม่สำเร็จ")); return; }
+        if (db.cloud) {
+          db.receivePO(po.id)
+            .then(async () => {
+              // Attachments were only reference photos — remove them once goods arrived
+              if (po.imageUrls && po.imageUrls.length) {
+                await db.deleteImages(po.imageUrls);
+                await db.clearPOImages(po.id);
+              }
+              notify("success", "รับของเข้าคลังแล้ว");
+            })
+            .catch(() => notify("error", "รับของไม่สำเร็จ"));
+          return;
+        }
         let done = false;
         setPurchaseOrders((prev) =>
           prev.map((p) => {
@@ -2410,7 +2441,10 @@ function PurchaseOrders({ purchaseOrders, setPurchaseOrders, items, setItems, us
       tone: "danger",
       onConfirm: () => {
         undoReceived(po);
-        if (db.cloud) db.deletePO(po.id).catch((e) => notify("error", "ลบไม่สำเร็จ: " + (e && e.message ? e.message : "")));
+        if (db.cloud) {
+          if (po.imageUrls && po.imageUrls.length) db.deleteImages(po.imageUrls);
+          db.deletePO(po.id).catch((e) => notify("error", "ลบไม่สำเร็จ: " + (e && e.message ? e.message : "")));
+        }
         setPurchaseOrders((prev) => prev.filter((x) => x.id !== po.id));
         notify("success", "ลบรายการสั่งซื้อแล้ว");
       },
@@ -2489,7 +2523,22 @@ function PurchaseOrders({ purchaseOrders, setPurchaseOrders, items, setItems, us
                     {po.line ? ` · Line ${po.line}` : ""}{po.machine ? ` · ${po.machine}` : ""}
                     {" · "}{fmtDateTime(po.createdAt)}
                   </div>
-                  {po.imageCount ? <div className={`text-[11px] mt-0.5 ${dark ? "text-slate-500" : "text-slate-400"}`}>แนบรูป {po.imageCount} ภาพ</div> : null}
+                  {po.imageUrls && po.imageUrls.length > 0 ? (
+                    <div className="flex items-center gap-2 mt-2">
+                      {po.imageUrls.map((url, idx) => (
+                        <button
+                          key={idx}
+                          onClick={(e) => { e.stopPropagation(); setPreviewImg({ urls: po.imageUrls, index: idx, title: po.itemName }); }}
+                          className={`w-14 h-14 rounded-lg overflow-hidden border shrink-0 hover:ring-2 hover:ring-[#7FD4A8] transition-all ${dark ? "border-white/15 bg-white/5" : "border-slate-200 bg-slate-50"}`}
+                          title="กดเพื่อดูภาพใหญ่"
+                        >
+                          <img src={url} alt={`แนบรูป ${idx + 1}`} className="w-full h-full object-cover" loading="lazy" />
+                        </button>
+                      ))}
+                    </div>
+                  ) : po.imageCount ? (
+                    <div className={`text-[11px] mt-0.5 ${dark ? "text-slate-500" : "text-slate-400"}`}>แนบรูป {po.imageCount} ภาพ</div>
+                  ) : null}
                   {po.note && <div className={`text-xs mt-1 italic ${dark ? "text-slate-400" : "text-slate-500"}`}>"{po.note}"</div>}
                 </div>
 
@@ -2551,8 +2600,12 @@ function PurchaseOrders({ purchaseOrders, setPurchaseOrders, items, setItems, us
               try {
                 const imageUrls = await db.uploadImages(files || []);
                 await db.createPO({ ...rest, requestedBy: user.name, imageUrls });
-                notify("success", "ส่งคำขอสั่งซื้อแล้ว รออนุมัติ");
-              } catch (e) { notify("error", "ส่งคำขอไม่สำเร็จ"); }
+                if ((files || []).length > imageUrls.length) {
+                  notify("error", `ส่งคำขอแล้ว แต่อัปโหลดรูปได้ ${imageUrls.length}/${files.length} ภาพ`);
+                } else {
+                  notify("success", "ส่งคำขอสั่งซื้อแล้ว รออนุมัติ");
+                }
+              } catch (e) { notify("error", "ส่งคำขอไม่สำเร็จ: " + (e && e.message ? e.message : "")); }
               return;
             }
             setPurchaseOrders((prev) => [
@@ -2563,6 +2616,37 @@ function PurchaseOrders({ purchaseOrders, setPurchaseOrders, items, setItems, us
             notify("success", "ส่งคำขอสั่งซื้อแล้ว รออนุมัติ");
           }}
         />
+      )}
+
+      {/* Attached image viewer */}
+      {previewImg && (
+        <div className="fixed inset-0 bg-black/85 z-[80] flex flex-col" onClick={() => setPreviewImg(null)}>
+          <div className="flex items-center justify-between px-4 py-3 text-white shrink-0">
+            <div className="text-sm font-medium truncate pr-3">
+              {previewImg.title}
+              <span className="text-white/60 ml-2">{previewImg.index + 1}/{previewImg.urls.length}</span>
+            </div>
+            <button onClick={() => setPreviewImg(null)} className="p-2 rounded-lg hover:bg-white/10" aria-label="ปิด">
+              <X size={22} />
+            </button>
+          </div>
+          <div className="flex-1 flex items-center justify-center p-4 min-h-0" onClick={(e) => e.stopPropagation()}>
+            <img src={previewImg.urls[previewImg.index]} alt="รูปแนบ" className="max-w-full max-h-full object-contain rounded-lg" />
+          </div>
+          {previewImg.urls.length > 1 && (
+            <div className="flex justify-center gap-2 p-4 shrink-0" onClick={(e) => e.stopPropagation()}>
+              {previewImg.urls.map((u, i) => (
+                <button
+                  key={i}
+                  onClick={() => setPreviewImg({ ...previewImg, index: i })}
+                  className={`w-12 h-12 rounded-lg overflow-hidden border-2 transition-all ${i === previewImg.index ? "border-[#7FD4A8]" : "border-white/20 opacity-60"}`}
+                >
+                  <img src={u} alt="" className="w-full h-full object-cover" />
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
@@ -2714,7 +2798,7 @@ function NewPOForm({ items, user, onSave, onClose, notify }) {
                   </label>
                 )}
               </div>
-              <div className="text-[11px] text-slate-400 mt-1">* ตอนนี้แนบเพื่อดูตัวอย่าง ยังไม่บันทึกถาวร (จะเก็บจริงเมื่อต่อ Supabase)</div>
+              <div className="text-[11px] text-slate-400 mt-1">* รูปจะถูกอัปโหลดเก็บถาวร แอดมินเปิดดูได้ในรายการสั่งซื้อ</div>
             </div>
 
             <label className="block">
