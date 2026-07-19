@@ -806,20 +806,13 @@ function Login({ onLogin, session, onSignedIn, notify }) {
 
       <div className="w-full max-w-3xl relative z-10">
         <div className="mb-7 sm:mb-9">
-          <div className="flex items-center gap-3 mb-3.5">
-            <div
-              className="h-12 sm:h-14 flex items-center px-3.5 rounded-2xl shrink-0"
-              style={{
-                background: "#ffffff",
-                boxShadow: "0 10px 30px -10px rgba(0,0,0,0.55), inset 0 1px 1px rgba(255,255,255,0.8)",
-              }}
-            >
-              <img src={NACHI_LOGO} alt="NACHI" className="h-5 sm:h-6 w-auto" />
-            </div>
-            <span
-              className="inline-flex items-center px-3 py-1.5 rounded-full text-[11px] sm:text-xs font-bold tracking-[0.22em] uppercase text-[#A7E8C6]"
-              style={{ background: "rgba(127,212,168,0.16)", border: "1px solid rgba(127,212,168,0.38)" }}
-            >
+          <div
+            className="inline-flex items-center gap-3 sm:gap-3.5 rounded-2xl bg-white px-3.5 sm:px-4 py-2.5 sm:py-3 mb-4"
+            style={{ boxShadow: "0 12px 32px -12px rgba(0,0,0,0.6), inset 0 1px 1px rgba(255,255,255,0.9)" }}
+          >
+            <img src={NACHI_LOGO} alt="NACHI" className="h-5 sm:h-6 w-auto" />
+            <span className="h-6 sm:h-7 w-px bg-slate-200 shrink-0" />
+            <span className="text-[#0F1E33] text-[11px] sm:text-[13px] font-extrabold tracking-[0.24em] uppercase leading-none">
               Factory 4
             </span>
           </div>
@@ -2788,16 +2781,13 @@ function App() {
               title="กลับหน้าเลือกแผนก"
               className="flex items-center gap-2.5 hover:opacity-90 transition-opacity"
             >
-              <div className="h-9 flex items-center px-2.5 rounded-xl bg-white shrink-0 shadow-sm">
+              <div className="h-9 flex items-center gap-2.5 px-2.5 rounded-xl bg-white shrink-0 shadow-sm">
                 <img src={NACHI_LOGO} alt="NACHI" className="h-4 w-auto" />
+                <span className="h-4 w-px bg-slate-200 shrink-0" />
+                <span className="text-[#0F1E33] text-[9px] sm:text-[10px] font-extrabold tracking-[0.2em] uppercase leading-none">
+                  Factory 4
+                </span>
               </div>
-              {/* Factory 4 badge — always visible */}
-              <span
-                className="inline-flex items-center px-2 sm:px-2.5 py-1 rounded-full text-[9px] sm:text-[10px] font-bold tracking-[0.16em] uppercase text-[#A7E8C6] shrink-0"
-                style={{ background: "rgba(127,212,168,0.15)", border: "1px solid rgba(127,212,168,0.32)" }}
-              >
-                Factory 4
-              </span>
               <div className="text-left leading-none hidden md:block">
                 <div className="font-bold text-[15px] tracking-tight text-white">Store Engineering</div>
               </div>
