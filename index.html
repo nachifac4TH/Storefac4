@@ -108,6 +108,7 @@ const DEPARTMENTS = [
   { id: "first_grinding", name: "First Grinding", color: "#1E3A5F", icon: "layers" },
   { id: "grinding", name: "Grinding", color: "#B45309", icon: "circle" },
   { id: "assembly", name: "Assembly", color: "#5B21B6", icon: "box" },
+  { id: "engineering", name: "Engineering", color: "#0E7490", icon: "factory" },
 ];
 const ADMIN_DEPT = { id: "admin", name: "Admin", color: "#065F46", icon: "shield" };
 const CENTRAL = { id: "central", name: "ส่วนกลาง", color: "#475569" };
@@ -152,11 +153,24 @@ const LINES_BY_DEPT = {
   })(),
   assembly: Array.from({ length: 19 }, (_, i) => "A" + (401 + i)),
 };
+LINES_BY_DEPT.engineering = [
+  ...LINES_BY_DEPT.first_grinding,
+  ...LINES_BY_DEPT.grinding,
+  ...LINES_BY_DEPT.assembly,
+];
 const MACHINES_BY_DEPT = {
   first_grinding: ["SF", "OD", "อื่นๆ"],
   grinding: ["Lift", "Raceway", "Bore", "Auto check", "Honing", "Pump coolant", "อื่นๆ"],
   assembly: ["Part feeder", "Lift", "Matching", "Caulking", "Laser mark", "Washing", "De oil", "GSP", "visual", "อื่นๆ"],
 };
+MACHINES_BY_DEPT.engineering = (() => {
+  const merged = [
+    ...MACHINES_BY_DEPT.first_grinding,
+    ...MACHINES_BY_DEPT.grinding,
+    ...MACHINES_BY_DEPT.assembly,
+  ].filter((m) => m !== "อื่นๆ");
+  return [...Array.from(new Set(merged)), "อื่นๆ"];
+})();
 const linesFor = (deptId) => LINES_BY_DEPT[deptId] || [];
 const machinesFor = (deptId) => MACHINES_BY_DEPT[deptId] || [];
 const uid = () => Math.random().toString(36).slice(2, 10);
@@ -548,7 +562,7 @@ function SupabaseLogin({ onSignedIn, onClose, notify, asModal }) {
     </div>
   );
 }
-const DEPT_ICON = { layers: Layers, circle: Circle, box: Package, shield: ShieldCheck };
+const DEPT_ICON = { layers: Layers, circle: Circle, box: Package, shield: ShieldCheck, factory: Factory };
 function Icon3D({ kind, size = 76 }) {
   const common = { width: size, height: size, viewBox: "0 0 100 100", xmlns: "http://www.w3.org/2000/svg" };
   if (kind === "first_grinding") {
@@ -613,6 +627,31 @@ function Icon3D({ kind, size = 76 }) {
         <circle cx="49" cy="46" r="6" fill="#8b5cf6" />
         <circle cx="62" cy="26" r="5" fill="#8b5cf6" />
         <path d="M66 20 l8 -3 M66 26 l8 0 M66 32 l8 3" stroke="#a78bfa" strokeWidth="2.5" strokeLinecap="round" fill="none" />
+      </svg>
+    );
+  }
+  if (kind === "engineering") {
+    return (
+      <svg {...common}>
+        <defs>
+          <linearGradient id="en1" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stopColor="#67e8f9" /><stop offset="1" stopColor="#0e7490" />
+          </linearGradient>
+        </defs>
+        <ellipse cx="50" cy="84" rx="26" ry="7" fill="#0e7490" opacity="0.32" />
+        <g transform="translate(0,-2)">
+          <path
+            d="M50 22 l5.5 2.2 3.4-4.6 4.6 3.9-2.2 5.3 4.9 4.9 5.3-2.2 3.9 4.6-4.6 3.4 2.2 5.5-2.2 5.5 4.6 3.4-3.9 4.6-5.3-2.2-4.9 4.9 2.2 5.3-4.6 3.9-3.4-4.6-5.5 2.2-5.5-2.2-3.4 4.6-4.6-3.9 2.2-5.3-4.9-4.9-5.3 2.2-3.9-4.6 4.6-3.4-2.2-5.5 2.2-5.5-4.6-3.4 3.9-4.6 5.3 2.2 4.9-4.9-2.2-5.3 4.6-3.9 3.4 4.6z"
+            fill="url(#en1)" opacity="0.9" transform="scale(0.86) translate(8,6)"
+          />
+          <circle cx="50" cy="50" r="13" fill="#0b3d52" />
+          <circle cx="50" cy="50" r="8" fill="#155e75" />
+        </g>
+        <g transform="rotate(-38 50 50)">
+          <rect x="46" y="30" width="8" height="42" rx="4" fill="#e2e8f0" />
+          <path d="M42 30 h16 v-6 a8 8 0 0 0 -16 0 z" fill="#f8fafc" />
+          <circle cx="50" cy="26" r="3.4" fill="#0e7490" />
+        </g>
       </svg>
     );
   }
@@ -888,7 +927,6 @@ function AdminAuthModal({ onSuccess, onClose }) {
     </div>
   );
 }
-const REQUESTER_KEY = "nachi_recent_requesters"; // recent names offered as one-tap shortcuts
 const LAST_DEPT_KEY = "nachi_last_dept"; // lets a scanned label reopen the same department
 const WEBAUTHN_KEY = "nachi_admin_cred"; // stores the registered credential id (base64) on this device
 function b64urlToBuf(s) {
@@ -2429,12 +2467,6 @@ function RequisitionDetail({ item, user, onSubmit, onClose, notify }) {
   const defaultDept = user.id === "admin" ? DEPARTMENTS[0].id : user.id;
   const [qty, setQty] = useState("1");
   const [requestedBy, setRequestedBy] = useState("");
-  const recentNames = React.useMemo(() => {
-    try {
-      const raw = JSON.parse(localStorage.getItem(REQUESTER_KEY) || "[]");
-      return Array.isArray(raw) ? raw.filter(Boolean).slice(0, 8) : [];
-    } catch (e) { return []; }
-  }, []);
   const [deptId, setDeptId] = useState(defaultDept);
   const [line, setLine] = useState("");
   const [machine, setMachine] = useState("");
@@ -2451,10 +2483,6 @@ function RequisitionDetail({ item, user, onSubmit, onClose, notify }) {
     if (qtyNum > item.stock) { notify?.("error", `เบิกได้ไม่เกิน ${item.stock} ${item.unit} (คงเหลือในสต็อก)`); return; }
     if (!line || !machine) { notify?.("error", "กรุณาเลือก Line และเครื่องจักร"); return; }
     const who = requestedBy.trim();
-    try {
-      const next = [who, ...recentNames.filter((n) => n !== who)].slice(0, 8);
-      localStorage.setItem(REQUESTER_KEY, JSON.stringify(next));
-    } catch (e) {}
     onSubmit({ item, qty: qtyNum, deptId, deptName, line, machine, note: note.trim(), requestedBy: who });
   };
   return (
@@ -2483,26 +2511,7 @@ function RequisitionDetail({ item, user, onSubmit, onClose, notify }) {
           {low && <div className="mt-2 text-xs text-amber-600">⚠ สินค้าใกล้หมด (ขั้นต่ำ {item.minStock})</div>}
         </div>
         <div className="p-5 space-y-3">
-          <div>
-            <Field label="ชื่อผู้เบิก" value={requestedBy} onChange={setRequestedBy} placeholder="พิมพ์ชื่อผู้เบิก" />
-            {recentNames.length > 0 && (
-              <div className="flex flex-wrap gap-1.5 mt-2">
-                <span className="text-[11px] text-slate-400 self-center mr-0.5">เคยเบิก:</span>
-                {recentNames.map((n) => (
-                  <button
-                    key={n}
-                    type="button"
-                    onClick={() => setRequestedBy(n)}
-                    className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
-                      requestedBy === n ? "bg-[#1E3A5F] text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                    }`}
-                  >
-                    {n}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
+          <Field label="ชื่อผู้เบิก" value={requestedBy} onChange={setRequestedBy} placeholder="พิมพ์ชื่อผู้เบิก" />
           <div>
             <Field label={`จำนวนที่ต้องการเบิก (${item.unit}) — สูงสุด ${item.stock}`} type="number" value={qty} onChange={setQty} />
             {overStock && <div className="text-xs text-red-500 mt-1">เกินจำนวนคงเหลือในสต็อก</div>}
