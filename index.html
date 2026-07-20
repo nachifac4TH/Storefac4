@@ -210,7 +210,7 @@ try {
 }
 const itemFromRow = (r) => ({ id: r.id, sku: r.sku || "", name: r.name, unit: r.unit || "ชิ้น", stock: r.stock, minStock: r.min_stock, price: Number(r.price), category: r.category || "ทั่วไป", deptId: r.dept_id || "central", supplier: r.supplier || "" });
 const itemToRow = (i) => ({ sku: i.sku || "", name: i.name, unit: i.unit || "ชิ้น", stock: toNum(i.stock, 0), min_stock: toNum(i.minStock, 0), price: toNum(i.price, 0), category: i.category || "ทั่วไป", dept_id: i.deptId || "central", supplier: i.supplier || "" });
-const reqFromRow = (r) => ({ id: r.id, itemId: r.item_id, itemName: r.item_name, qty: r.qty, note: r.note || "", status: r.status, deptId: r.dept_id, deptName: r.dept_name, line: r.line || "", machine: r.machine || "", createdAt: new Date(r.created_at).getTime() });
+const reqFromRow = (r) => ({ id: r.id, itemId: r.item_id, itemName: r.item_name, qty: r.qty, note: r.note || "", status: r.status, deptId: r.dept_id, deptName: r.dept_name, line: r.line || "", machine: r.machine || "", requestedBy: r.requested_by || "", createdAt: new Date(r.created_at).getTime() });
 const poFromRow = (r) => ({ id: r.id, itemId: r.item_id, itemName: r.item_name, qty: r.qty, unitPrice: Number(r.unit_price), note: r.note || "", status: r.status, deptId: r.dept_id, deptName: r.dept_name, requestedBy: r.requested_by, line: r.line || "", machine: r.machine || "", urgent: !!r.urgent, imageUrls: r.image_urls || [], imageCount: (r.image_urls || []).length, createdAt: new Date(r.created_at).getTime() });
 const LS_PREFIX = "nachi_store_";
 async function localLoadAll() {
@@ -321,11 +321,11 @@ const db = {
     const { error } = await sb.from("items").delete().eq("id", id);
     if (error) throw error;
   },
-  async withdraw({ itemId, qty, deptId, deptName, line, machine, note }) {
+  async withdraw({ itemId, qty, deptId, deptName, line, machine, note, requestedBy }) {
     if (!CLOUD) return null;
     const { data, error } = await sb.rpc("withdraw_item", {
       p_item_id: itemId, p_qty: qty, p_dept_id: deptId, p_dept_name: deptName,
-      p_line: line, p_machine: machine, p_note: note || "",
+      p_line: line, p_machine: machine, p_note: note || "", p_requested_by: requestedBy || "",
     });
     if (error) throw error;
     return data ? reqFromRow(Array.isArray(data) ? data[0] : data) : null;
@@ -888,6 +888,7 @@ function AdminAuthModal({ onSuccess, onClose }) {
     </div>
   );
 }
+const REQUESTER_KEY = "nachi_recent_requesters"; // recent names offered as one-tap shortcuts
 const LAST_DEPT_KEY = "nachi_last_dept"; // lets a scanned label reopen the same department
 const WEBAUTHN_KEY = "nachi_admin_cred"; // stores the registered credential id (base64) on this device
 function b64urlToBuf(s) {
@@ -1907,14 +1908,14 @@ function Requisitions({ requisitions, setRequisitions, items, setItems, user, pu
       notify("error", `ไม่พบสินค้ารหัส "${code}" — แสดงผลการค้นหาแทน`);
     }
   };
-  const submitWithdraw = ({ item, qty, deptId, deptName, line, machine, note }) => {
+  const submitWithdraw = ({ item, qty, deptId, deptName, line, machine, note, requestedBy }) => {
     const current = items.find((i) => i.id === item.id);
     if (!current || current.stock < qty) {
       notify("error", `สต็อกไม่พอ: คงเหลือ ${current ? current.stock : 0} ${item.unit}`);
       return;
     }
     if (db.cloud) {
-      db.withdraw({ itemId: item.id, qty, deptId, deptName, line, machine, note })
+      db.withdraw({ itemId: item.id, qty, deptId, deptName, line, machine, note, requestedBy })
         .then(() => notify("success", `เบิก ${item.name} × ${qty} — ตัดสต็อกแล้ว`))
         .catch((e) => {
           const msg = String(e && e.message || "");
@@ -1926,7 +1927,7 @@ function Requisitions({ requisitions, setRequisitions, items, setItems, user, pu
     }
     setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, stock: Math.max(0, i.stock - qty) } : i)));
     setRequisitions((prev) => [
-      { id: uid(), itemId: item.id, itemName: item.name, qty, note, status: "fulfilled", deptId, deptName, line, machine, createdAt: Date.now() },
+      { id: uid(), itemId: item.id, itemName: item.name, qty, note, status: "fulfilled", deptId, deptName, line, machine, requestedBy, createdAt: Date.now() },
       ...prev,
     ]);
     setPickedItem(null);
@@ -2184,7 +2185,7 @@ function Requisitions({ requisitions, setRequisitions, items, setItems, user, pu
                       {r.itemName} <span className={dark ? "text-slate-500 font-normal" : "text-slate-400 font-normal"}>× {r.qty}</span>
                     </div>
                     <div className={`text-xs mt-0.5 ${dark ? "text-slate-500" : "text-slate-400"}`}>
-                      {r.deptName}{r.line ? ` · Line ${r.line}` : ""}{r.machine ? ` · ${r.machine}` : ""}{" · "}{fmtDateTime(r.createdAt)}
+                      {r.requestedBy ? `${r.requestedBy} · ` : ""}{r.deptName}{r.line ? ` · Line ${r.line}` : ""}{r.machine ? ` · ${r.machine}` : ""}{" · "}{fmtDateTime(r.createdAt)}
                     </div>
                     {r.note && <div className={`text-xs mt-1 italic ${dark ? "text-slate-400" : "text-slate-500"}`}>"{r.note}"</div>}
                   </div>
@@ -2211,6 +2212,34 @@ function Requisitions({ requisitions, setRequisitions, items, setItems, user, pu
     </div>
   );
 }
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error, info) { console.error("App crash:", error, info); }
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <div className="min-h-screen flex items-center justify-center p-6" style={{ background: "#0a1628" }}>
+        <div className="max-w-md w-full bg-white rounded-2xl p-6 text-center">
+          <div className="w-12 h-12 rounded-full bg-red-50 flex items-center justify-center mx-auto mb-3">
+            <AlertTriangle size={24} className="text-red-500" />
+          </div>
+          <h2 className="font-semibold text-slate-800 mb-1">เกิดข้อผิดพลาด</h2>
+          <p className="text-sm text-slate-500 mb-4">แอปทำงานผิดพลาด กรุณาลองใหม่อีกครั้ง</p>
+          <p className="text-[11px] text-slate-400 mb-4 break-words">{String(this.state.error && this.state.error.message || this.state.error)}</p>
+          <div className="flex gap-2">
+            <button onClick={() => this.setState({ error: null })} className="flex-1 py-2.5 rounded-xl border border-slate-200 text-sm font-medium text-slate-600">
+              ลองต่อ
+            </button>
+            <button onClick={() => window.location.reload()} className="flex-1 py-2.5 rounded-xl bg-[#1E3A5F] text-white text-sm font-medium">
+              โหลดใหม่
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+}
 function ScannerModal({ onDetected, onClose, notify }) {
   const [status, setStatus] = useState("starting"); // starting | scanning | error
   const [manual, setManual] = useState("");
@@ -2224,9 +2253,17 @@ function ScannerModal({ onDetected, onClose, notify }) {
       notify?.("error", "โหลดตัวสแกนไม่สำเร็จ ตรวจสอบอินเทอร์เน็ต");
       return;
     }
-    const scanner = new window.Html5Qrcode("qr-reader", { verbose: false });
+    let scanner;
+    try {
+      scanner = new window.Html5Qrcode("qr-reader", { verbose: false });
+    } catch (err) {
+      setStatus("error");
+      notify?.("error", "เริ่มกล้องไม่สำเร็จ: " + (err && err.message ? err.message : ""));
+      return;
+    }
     scannerRef.current = scanner;
     const config = { fps: 10, qrbox: { width: 240, height: 150 }, aspectRatio: 1.3 };
+    try {
     scanner
       .start(
         { facingMode: "environment" },
@@ -2244,6 +2281,10 @@ function ScannerModal({ onDetected, onClose, notify }) {
       )
       .then(() => { if (!cancelled) { startedRef.current = true; setStatus("scanning"); } })
       .catch(() => { if (!cancelled) { setStatus("error"); notify?.("error", "เปิดกล้องไม่สำเร็จ ตรวจสอบการอนุญาตใช้กล้อง"); } });
+    } catch (err) {
+      setStatus("error");
+      notify?.("error", "เปิดกล้องไม่สำเร็จ: " + (err && err.message ? err.message : ""));
+    }
     return () => {
       cancelled = true;
       const s = scannerRef.current;
@@ -2378,20 +2419,33 @@ function DeptLineMachineFields({ user, deptId, setDeptId, line, setLine, machine
 function RequisitionDetail({ item, user, onSubmit, onClose, notify }) {
   const defaultDept = user.id === "admin" ? DEPARTMENTS[0].id : user.id;
   const [qty, setQty] = useState("1");
+  const [requestedBy, setRequestedBy] = useState("");
+  const recentNames = React.useMemo(() => {
+    try {
+      const raw = JSON.parse(localStorage.getItem(REQUESTER_KEY) || "[]");
+      return Array.isArray(raw) ? raw.filter(Boolean).slice(0, 8) : [];
+    } catch (e) { return []; }
+  }, []);
   const [deptId, setDeptId] = useState(defaultDept);
   const [line, setLine] = useState("");
   const [machine, setMachine] = useState("");
   const [note, setNote] = useState("");
+  const [showMore, setShowMore] = useState(false);
   const qtyNum = toNum(qty, NaN);
   const overStock = Number.isFinite(qtyNum) && qtyNum > item.stock;
-  const valid = Number.isFinite(qtyNum) && qtyNum > 0 && qtyNum <= item.stock && line && machine;
+  const valid = Number.isFinite(qtyNum) && qtyNum > 0 && qtyNum <= item.stock && requestedBy.trim().length > 0;
   const low = item.stock <= item.minStock;
   const deptName = (DEPARTMENTS.find((d) => d.id === deptId) || {}).name || deptId;
   const handleSubmit = () => {
+    if (!requestedBy.trim()) { notify?.("error", "กรุณากรอกชื่อผู้เบิก"); return; }
     if (!Number.isFinite(qtyNum) || qtyNum <= 0) { notify?.("error", "กรุณากรอกจำนวนที่ต้องการเบิก"); return; }
     if (qtyNum > item.stock) { notify?.("error", `เบิกได้ไม่เกิน ${item.stock} ${item.unit} (คงเหลือในสต็อก)`); return; }
-    if (!line || !machine) { notify?.("error", "กรุณาเลือก Line และเครื่องจักร"); return; }
-    onSubmit({ item, qty: qtyNum, deptId, deptName, line, machine, note: note.trim() });
+    const who = requestedBy.trim();
+    try {
+      const next = [who, ...recentNames.filter((n) => n !== who)].slice(0, 8);
+      localStorage.setItem(REQUESTER_KEY, JSON.stringify(next));
+    } catch (e) {}
+    onSubmit({ item, qty: qtyNum, deptId, deptName, line, machine, note: note.trim(), requestedBy: who });
   };
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={onClose}>
@@ -2420,9 +2474,39 @@ function RequisitionDetail({ item, user, onSubmit, onClose, notify }) {
         </div>
         <div className="p-5 space-y-3">
           <div>
+            <Field label="ชื่อผู้เบิก" value={requestedBy} onChange={setRequestedBy} placeholder="พิมพ์ชื่อผู้เบิก" />
+            {recentNames.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 mt-2">
+                <span className="text-[11px] text-slate-400 self-center mr-0.5">เคยเบิก:</span>
+                {recentNames.map((n) => (
+                  <button
+                    key={n}
+                    type="button"
+                    onClick={() => setRequestedBy(n)}
+                    className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
+                      requestedBy === n ? "bg-[#1E3A5F] text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                    }`}
+                  >
+                    {n}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <div>
             <Field label={`จำนวนที่ต้องการเบิก (${item.unit}) — สูงสุด ${item.stock}`} type="number" value={qty} onChange={setQty} />
             {overStock && <div className="text-xs text-red-500 mt-1">เกินจำนวนคงเหลือในสต็อก</div>}
           </div>
+          <button
+            type="button"
+            onClick={() => setShowMore((v) => !v)}
+            className="w-full flex items-center justify-between px-3 py-2.5 rounded-lg border border-slate-200 text-sm text-slate-600 hover:bg-slate-50"
+          >
+            <span>ระบุ Line / เครื่องจักร / หมายเหตุ <span className="text-slate-400">(ไม่บังคับ)</span></span>
+            <span className={`transition-transform ${showMore ? "rotate-90" : ""}`}><ChevronRight size={16} /></span>
+          </button>
+          {showMore && (
+          <>
           <DeptLineMachineFields user={user} deptId={deptId} setDeptId={setDeptId} line={line} setLine={setLine} machine={machine} setMachine={setMachine} />
           <label className="block">
             <span className="text-xs text-slate-500 mb-1 block">หมายเหตุ (ไม่บังคับ)</span>
@@ -2434,6 +2518,8 @@ function RequisitionDetail({ item, user, onSubmit, onClose, notify }) {
               placeholder="เช่น ใช้สำหรับงานวันที่..."
             />
           </label>
+          </>
+          )}
           <div className="flex gap-2 pt-1">
             <button onClick={onClose} className="flex-1 py-2.5 rounded-xl border border-slate-200 text-sm font-medium text-slate-600 hover:bg-slate-50">ยกเลิก</button>
             <button
@@ -3209,9 +3295,12 @@ function App() {
     </div>
   );
 }
+    window.addEventListener("error", function (e) { console.error("window error:", e.message); });
+    window.addEventListener("unhandledrejection", function (e) { console.error("unhandled promise:", e.reason); });
+
     try {
       const root = ReactDOM.createRoot(document.getElementById("root"));
-      root.render(React.createElement(App));
+      root.render(React.createElement(ErrorBoundary, null, React.createElement(App)));
     } catch (err) {
       document.getElementById("root").innerHTML =
         '<div style="padding:24px;font-family:sans-serif;color:#b91c1c">' +
