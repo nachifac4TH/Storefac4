@@ -1426,6 +1426,49 @@ function Inventory({ items, setItems, user, notify, confirm }) {
         notify("success", "ลบสินค้าแล้ว");
       },
     });
+  const handleStockCSV = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (evt) => {
+      try {
+        const text = evt.target.result.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+        const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+        if (lines.length < 2) { notify("error", "ไฟล์ต้องมีหัวตารางและอย่างน้อย 1 แถว"); return; }
+        const header = parseCSVLine(lines[0]).map((h) => h.replace(/^\uFEFF/, "").toLowerCase().trim());
+        const iSku = header.indexOf("sku");
+        const iStock = header.indexOf("stock");
+        if (iSku === -1 || iStock === -1) { notify("error", 'ต้องมีคอลัมน์ "sku" และ "stock"'); return; }
+        const bySku = {};
+        items.forEach((i) => { bySku[(i.sku || "").toLowerCase().trim()] = i; });
+        const changes = [];
+        let matched = 0, missing = 0;
+        lines.slice(1).forEach((line) => {
+          const cols = parseCSVLine(line);
+          const sku = (cols[iSku] || "").toLowerCase().trim();
+          if (!sku) return;
+          const item = bySku[sku];
+          if (!item) { missing++; return; }
+          matched++;
+          const n = toNum(cols[iStock], NaN);
+          if (Number.isFinite(n) && n >= 0 && n !== item.stock) changes.push({ id: item.id, stock: n });
+        });
+        if (changes.length === 0) {
+          notify("error", `ไม่มีอะไรต้องอัปเดต (ตรงกัน ${matched} รายการ, ไม่พบ ${missing})`);
+          return;
+        }
+        if (db.cloud) await db.updateStocks(changes);
+        const map = {};
+        changes.forEach((c) => { map[c.id] = c.stock; });
+        setItems((prev) => prev.map((i) => (map[i.id] !== undefined ? { ...i, stock: map[i.id] } : i)));
+        notify("success", `อัปเดตสต็อก ${changes.length} รายการ${missing ? ` · ไม่พบ SKU ${missing} รายการ` : ""}`);
+      } catch (err) {
+        notify("error", "อ่านไฟล์ไม่สำเร็จ: " + (err && err.message ? err.message : ""));
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  };
   const handleCSV = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -1489,6 +1532,13 @@ function Inventory({ items, setItems, user, notify, confirm }) {
             <label className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl border border-slate-200 text-sm font-medium text-slate-600 hover:bg-slate-50 cursor-pointer transition-colors">
               <Upload size={15} /> นำเข้า CSV
               <input type="file" accept=".csv" onChange={handleCSV} className="hidden" />
+            </label>
+            <label
+              title="อัปเดตยอดคงเหลือของสินค้าที่มีอยู่ โดยจับคู่จากคอลัมน์ sku"
+              className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl border border-emerald-200 bg-emerald-50 text-sm font-medium text-emerald-700 hover:bg-emerald-100 cursor-pointer transition-colors"
+            >
+              <TrendingDown size={15} /> อัปเดตสต็อก (CSV)
+              <input type="file" accept=".csv" onChange={handleStockCSV} className="hidden" />
             </label>
             <button
               onClick={() => printQRLabels(filtered, notify)}
