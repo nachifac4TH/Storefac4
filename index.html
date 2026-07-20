@@ -1351,11 +1351,11 @@ function printQRLabels(list, notify) {
   const esc = (t) => String(t == null ? "" : t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const base = (window.location.origin || "") + (window.location.pathname || "");
   const cells = list.map((i) => {
-    const q = window.qrcode(0, "M");
+    const q = window.qrcode(0, "L");
     q.addData(`${base}?sku=${encodeURIComponent(i.sku || i.name)}`);
     q.make();
     return `<div class="label">
-      <div class="qr">${q.createSvgTag({ cellSize: 3, margin: 0, scalable: true })}</div>
+      <div class="qr">${q.createSvgTag({ cellSize: 4, margin: 16, scalable: true })}</div>
       <div class="meta">
         <div class="sku">${esc(i.sku)}</div>
         <div class="name">${esc(i.name)}</div>
@@ -1371,10 +1371,11 @@ function printQRLabels(list, notify) {
   .toolbar { position: sticky; top: 0; background: #fff; padding: 8px 0 14px; border-bottom: 1px solid #e2e8f0; margin-bottom: 10px; }
   .toolbar button { font: inherit; padding: 10px 18px; border-radius: 10px; border: 0; background: #1E3A5F; color: #fff; cursor: pointer; }
   .toolbar span { margin-left: 12px; color: #64748b; font-size: 14px; }
-  .sheet { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4mm; }
+  .sheet { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4mm; }
   .label { border: 1px solid #cbd5e1; border-radius: 3mm; padding: 3mm; display: flex; gap: 2.5mm; align-items: center;
-           break-inside: avoid; page-break-inside: avoid; height: 26mm; overflow: hidden; }
-  .qr svg { width: 20mm; height: 20mm; display: block; }
+           break-inside: avoid; page-break-inside: avoid; height: 34mm; overflow: hidden; background: #fff; }
+  .qr { background: #fff; }
+  .qr svg { width: 28mm; height: 28mm; display: block; }
   .meta { min-width: 0; }
   .sku { font-weight: 800; font-size: 10pt; letter-spacing: .2px; word-break: break-all; line-height: 1.15; }
   .name { font-size: 7.5pt; color: #334155; line-height: 1.2; margin-top: 1mm;
@@ -1383,7 +1384,7 @@ function printQRLabels(list, notify) {
   @page { size: A4; margin: 8mm; }
   @media print { .toolbar { display: none; } body { padding: 0; } }
 </style></head><body>
-<div class="toolbar"><button onclick="window.print()">🖨️ พิมพ์ป้าย</button><span>${list.length} ป้าย · A4 (4 ป้าย/แถว)</span></div>
+<div class="toolbar"><button onclick="window.print()">🖨️ พิมพ์ป้าย</button><span>${list.length} ป้าย · A4 (3 ป้าย/แถว · QR 28 มม.)</span></div>
 <div class="sheet">${cells}</div>
 </body></html>`;
   const w = window.open("", "_blank");
@@ -2246,6 +2247,7 @@ function ScannerModal({ onDetected, onClose, notify }) {
   const scannerRef = React.useRef(null);
   const startedRef = React.useRef(false);
   const handledRef = React.useRef(false);
+  const stopRef = React.useRef(null);
   useEffect(() => {
     let cancelled = false;
     if (typeof window.Html5Qrcode === "undefined") {
@@ -2262,7 +2264,21 @@ function ScannerModal({ onDetected, onClose, notify }) {
       return;
     }
     scannerRef.current = scanner;
-    const config = { fps: 10, qrbox: { width: 240, height: 150 }, aspectRatio: 1.3 };
+    const config = { fps: 10, qrbox: { width: 260, height: 260 }, aspectRatio: 1 };
+    const stopOnce = () => {
+      const s = scannerRef.current;
+      scannerRef.current = null;
+      if (!s) return Promise.resolve();
+      try {
+        if (!startedRef.current) { try { s.clear(); } catch (e) {} return Promise.resolve(); }
+        startedRef.current = false;
+        const p = s.stop();
+        return (p && typeof p.then === "function" ? p : Promise.resolve())
+          .then(() => { try { s.clear(); } catch (e) {} })
+          .catch(() => {});
+      } catch (e) { return Promise.resolve(); }
+    };
+    stopRef.current = stopOnce;
     try {
     scanner
       .start(
@@ -2271,11 +2287,7 @@ function ScannerModal({ onDetected, onClose, notify }) {
         (decodedText) => {
           if (cancelled || handledRef.current) return;
           handledRef.current = true;
-          const s = scannerRef.current;
-          const finish = () => onDetected(decodedText);
-          if (s && startedRef.current) {
-            s.stop().then(() => { try { s.clear(); } catch (e) {} finish(); }).catch(finish);
-          } else finish();
+          stopOnce().then(() => onDetected(decodedText));
         },
         () => {} // ignore per-frame decode misses
       )
@@ -2287,10 +2299,7 @@ function ScannerModal({ onDetected, onClose, notify }) {
     }
     return () => {
       cancelled = true;
-      const s = scannerRef.current;
-      if (s && startedRef.current) {
-        s.stop().then(() => { try { s.clear(); } catch (e) {} }).catch(() => {});
-      }
+      try { stopRef.current && stopRef.current(); } catch (e) {}
     };
   }, []);
   const submitManual = () => {
