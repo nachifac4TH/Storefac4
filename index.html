@@ -888,6 +888,7 @@ function AdminAuthModal({ onSuccess, onClose }) {
     </div>
   );
 }
+const LAST_DEPT_KEY = "nachi_last_dept"; // lets a scanned label reopen the same department
 const WEBAUTHN_KEY = "nachi_admin_cred"; // stores the registered credential id (base64) on this device
 function b64urlToBuf(s) {
   s = s.replace(/-/g, "+").replace(/_/g, "/");
@@ -1347,9 +1348,10 @@ function printQRLabels(list, notify) {
   }
   if (!list.length) { notify && notify("error", "ไม่มีรายการให้พิมพ์"); return; }
   const esc = (t) => String(t == null ? "" : t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const base = (window.location.origin || "") + (window.location.pathname || "");
   const cells = list.map((i) => {
     const q = window.qrcode(0, "M");
-    q.addData(i.sku || i.name);
+    q.addData(`${base}?sku=${encodeURIComponent(i.sku || i.name)}`);
     q.make();
     return `<div class="label">
       <div class="qr">${q.createSvgTag({ cellSize: 3, margin: 0, scalable: true })}</div>
@@ -1837,7 +1839,7 @@ function Field({ label, value, onChange, type = "text" }) {
     </label>
   );
 }
-function Requisitions({ requisitions, setRequisitions, items, setItems, user, purchaseOrders, setPurchaseOrders, notify, confirm, dark }) {
+function Requisitions({ requisitions, setRequisitions, items, setItems, user, purchaseOrders, setPurchaseOrders, notify, confirm, dark, pendingSku, onPendingSkuHandled }) {
   const [search, setSearch] = useState("");
   const [pickedItem, setPickedItem] = useState(null);
   const [scanning, setScanning] = useState(false);
@@ -1867,10 +1869,32 @@ function Requisitions({ requisitions, setRequisitions, items, setItems, user, pu
     const matchCat = category === "all" || (i.category || "ทั่วไป").trim() === category;
     return matchText && matchCat;
   });
+  useEffect(() => {
+    if (!pendingSku) return;
+    if (!items || items.length === 0) return;   // wait for the catalog to load
+    const code = String(pendingSku).trim().toLowerCase();
+    const found = myItems.find((i) => (i.sku || "").toLowerCase() === code);
+    if (found) {
+      if (found.stock > 0) setPickedItem(found);
+      else notify("error", `${found.name} หมดสต็อก`);
+    } else {
+      setSearch(pendingSku);
+      notify("error", `ไม่พบสินค้ารหัส "${pendingSku}"`);
+    }
+    onPendingSkuHandled && onPendingSkuHandled();
+    try {
+      if (window.history && window.history.replaceState) {
+        window.history.replaceState({}, "", window.location.pathname);
+      }
+    } catch (e) {}
+  }, [pendingSku, items]);
   const handleScan = (raw) => {
-    const code = (raw || "").trim();
+    let code = (raw || "").trim();
     setScanning(false);
     if (!code) return;
+    if (/[?&]sku=/i.test(code)) {
+      try { code = decodeURIComponent(code.split(/[?&]sku=/i)[1].split("&")[0]); } catch (e) {}
+    }
     const found = myItems.find(
       (i) => i.sku.toLowerCase() === code.toLowerCase() || i.name.toLowerCase() === code.toLowerCase()
     );
@@ -2936,10 +2960,25 @@ function NewPOForm({ items, user, onSave, onClose, notify }) {
   );
 }
 function App() {
-  const [user, setUser] = useState(null);
+  const [pendingSku, setPendingSku] = useState(() => {
+    try {
+      const v = new URLSearchParams(window.location.search).get("sku");
+      return v ? v.trim() : "";
+    } catch (e) { return ""; }
+  });
+  const [user, setUser] = useState(() => {
+    try {
+      if (!new URLSearchParams(window.location.search).get("sku")) return null;
+      const id = localStorage.getItem(LAST_DEPT_KEY);
+      return DEPARTMENTS.find((d) => d.id === id) || null;
+    } catch (e) { return null; }
+  });
   const [session, setSession] = useState(null);
   const [authReady, setAuthReady] = useState(!CLOUD); // localStorage mode = ready immediately
-  const [tab, setTab] = useState("dashboard");
+  const [tab, setTab] = useState(() => {
+    try { return new URLSearchParams(window.location.search).get("sku") ? "requisitions" : "dashboard"; }
+    catch (e) { return "dashboard"; }
+  });
   const [items, setItems] = useState(SEED_ITEMS);
   const [requisitions, setRequisitions] = useState([]);
   const [purchaseOrders, setPurchaseOrders] = useState([]);
@@ -3018,7 +3057,13 @@ function App() {
     setUser(null);
     if (CLOUD) db.signOut().then(() => setSession(null));
   }, []);
-  if (!user) return <Login onLogin={setUser} session={session} onSignedIn={setSession} notify={notify} />;
+  if (!user) {
+    const chooseUser = (u) => {
+      try { if (u && u.id !== "admin") localStorage.setItem(LAST_DEPT_KEY, u.id); } catch (e) {}
+      setUser(u);
+    };
+    return <Login onLogin={chooseUser} session={session} onSignedIn={setSession} notify={notify} />;
+  }
   const isAdmin = user.id === "admin";
   const nav = isAdmin
     ? [
@@ -3143,6 +3188,8 @@ function App() {
             notify={notify}
             confirm={confirm}
             dark={dark}
+            pendingSku={pendingSku}
+            onPendingSkuHandled={() => setPendingSku("")}
           />
         )}
         {activeTab === "po" && (
