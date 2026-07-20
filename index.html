@@ -240,15 +240,33 @@ const db = {
         purchaseOrders: purchaseOrders || [],
       };
     }
+    const fetchAll = async (table, ascending) => {
+      const PAGE = 1000;
+      let from = 0;
+      const rows = [];
+      for (;;) {
+        const { data, error } = await sb
+          .from(table)
+          .select("*")
+          .order("created_at", { ascending })
+          .range(from, from + PAGE - 1);
+        if (error) throw error;
+        const batch = data || [];
+        rows.push(...batch);
+        if (batch.length < PAGE) break;
+        from += PAGE;
+      }
+      return rows;
+    };
     const [i, r, p] = await Promise.all([
-      sb.from("items").select("*").order("created_at", { ascending: true }),
-      sb.from("requisitions").select("*").order("created_at", { ascending: false }),
-      sb.from("purchase_orders").select("*").order("created_at", { ascending: false }),
+      fetchAll("items", true),
+      fetchAll("requisitions", false),
+      fetchAll("purchase_orders", false),
     ]);
     return {
-      items: (i.data || []).map(itemFromRow),
-      requisitions: (r.data || []).map(reqFromRow),
-      purchaseOrders: (p.data || []).map(poFromRow),
+      items: i.map(itemFromRow),
+      requisitions: r.map(reqFromRow),
+      purchaseOrders: p.map(poFromRow),
     };
   },
   subscribe(onChange) {
