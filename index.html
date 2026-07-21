@@ -1864,6 +1864,15 @@ function Requisitions({ requisitions, setRequisitions, items, setItems, user, pu
   const [search, setSearch] = useState("");
   const [pickedItem, setPickedItem] = useState(null);
   const [returning, setReturning] = useState(null); // requisition being returned
+  const openReqsFor = (itemId) =>
+    requisitions
+      .filter((r) =>
+        r.itemId === itemId &&
+        (user.id === "admin" || r.deptId === user.id) &&
+        r.returnStatus !== "pending" &&
+        r.qty - (r.returnedQty || 0) > 0
+      )
+      .sort((a, b) => b.createdAt - a.createdAt);
   const [scanning, setScanning] = useState(false);
   const [period, setPeriod] = useState("all"); // all | day | month | year
   const [deptFilter, setDeptFilter] = useState("all");
@@ -2317,7 +2326,15 @@ function Requisitions({ requisitions, setRequisitions, items, setItems, user, pu
         <ReturnModal req={returning} notify={notify} onClose={() => setReturning(null)} onSubmit={submitReturn} />
       )}
       {pickedItem && (
-        <RequisitionDetail item={pickedItem} user={user} notify={notify} onClose={() => setPickedItem(null)} onSubmit={submitWithdraw} />
+        <RequisitionDetail
+          item={pickedItem}
+          user={user}
+          notify={notify}
+          onClose={() => setPickedItem(null)}
+          onSubmit={submitWithdraw}
+          openReqs={openReqsFor(pickedItem.id)}
+          onRequestReturn={isAdmin ? null : (payload) => { submitReturn(payload); setPickedItem(null); }}
+        />
       )}
       {scanning && (
         <ScannerModal onDetected={handleScan} onClose={() => setScanning(false)} notify={notify} />
@@ -2600,8 +2617,29 @@ function ReturnModal({ req, onSubmit, onClose, notify }) {
     </div>
   );
 }
-function RequisitionDetail({ item, user, onSubmit, onClose, notify }) {
+function RequisitionDetail({ item, user, onSubmit, onClose, notify, openReqs = [], onRequestReturn }) {
   const defaultDept = user.id === "admin" ? DEPARTMENTS[0].id : user.id;
+  const canReturn = openReqs.length > 0 && typeof onRequestReturn === "function";
+  const [mode, setMode] = useState(canReturn ? "return" : "withdraw");
+  const [pickedReqId, setPickedReqId] = useState(canReturn ? openReqs[0].id : null);
+  const pickedReq = openReqs.find((r) => r.id === pickedReqId) || openReqs[0] || null;
+  const remaining = pickedReq ? pickedReq.qty - (pickedReq.returnedQty || 0) : 0;
+  const [returnQty, setReturnQty] = useState("1");
+  const [returnBy, setReturnBy] = useState("");
+  useEffect(() => {
+    if (!pickedReq) return;
+    setReturnQty(String(Math.max(1, pickedReq.qty - (pickedReq.returnedQty || 0))));
+    setReturnBy(pickedReq.requestedBy || "");
+  }, [pickedReqId]);
+  const returnQtyNum = toNum(returnQty, NaN);
+  const returnValid = Number.isFinite(returnQtyNum) && returnQtyNum > 0 && returnQtyNum <= remaining && returnBy.trim().length > 0;
+  const submitReturnReq = () => {
+    if (!pickedReq) return;
+    if (!returnBy.trim()) { notify?.("error", "กรุณากรอกชื่อผู้ขอคืน"); return; }
+    if (!Number.isFinite(returnQtyNum) || returnQtyNum <= 0) { notify?.("error", "กรุณากรอกจำนวนที่คืน"); return; }
+    if (returnQtyNum > remaining) { notify?.("error", `คืนได้อีกไม่เกิน ${remaining} ชิ้น`); return; }
+    onRequestReturn({ req: pickedReq, qty: returnQtyNum, returnedBy: returnBy.trim() });
+  };
   const [qty, setQty] = useState("1");
   const [requestedBy, setRequestedBy] = useState("");
   const [deptId, setDeptId] = useState(defaultDept);
@@ -2647,6 +2685,86 @@ function RequisitionDetail({ item, user, onSubmit, onClose, notify }) {
           </div>
           {low && <div className="mt-2 text-xs text-amber-600">⚠ สินค้าใกล้หมด (ขั้นต่ำ {item.minStock})</div>}
         </div>
+        {canReturn && (
+          <div className="flex gap-2 px-5 pt-4">
+            <button
+              type="button"
+              onClick={() => setMode("return")}
+              className={`flex-1 py-2 rounded-lg text-sm font-semibold transition-colors ${
+                mode === "return" ? "bg-emerald-600 text-white" : "bg-slate-100 text-slate-500 hover:bg-slate-200"
+              }`}
+            >
+              คืนของ
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode("withdraw")}
+              className={`flex-1 py-2 rounded-lg text-sm font-semibold transition-colors ${
+                mode === "withdraw" ? "bg-[#1E3A5F] text-white" : "bg-slate-100 text-slate-500 hover:bg-slate-200"
+              }`}
+            >
+              เบิกเพิ่ม
+            </button>
+          </div>
+        )}
+        {mode === "return" && pickedReq ? (
+        <div className="p-5 space-y-3">
+          {openReqs.length > 1 && (
+            <div>
+              <span className="text-xs text-slate-500 mb-1 block">เลือกรายการที่เบิกไป</span>
+              <div className="space-y-1.5 max-h-40 overflow-y-auto">
+                {openReqs.map((r) => (
+                  <button
+                    key={r.id}
+                    type="button"
+                    onClick={() => setPickedReqId(r.id)}
+                    className={`w-full text-left px-3 py-2 rounded-lg border text-xs transition-colors ${
+                      r.id === pickedReqId ? "border-emerald-500 bg-emerald-50" : "border-slate-200 hover:bg-slate-50"
+                    }`}
+                  >
+                    <div className="font-semibold text-slate-700">{r.requestedBy || "ไม่ระบุชื่อ"} · {r.qty - (r.returnedQty || 0)} {item.unit}</div>
+                    <div className="text-slate-400">{r.line ? `Line ${r.line}` : ""}{r.machine ? ` · ${r.machine}` : ""} · {fmtDateTime(r.createdAt)}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {/* Exactly what was recorded at withdrawal time */}
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-1.5">
+            <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide">รายละเอียดตอนเบิก</div>
+            <div className="flex justify-between text-sm"><span className="text-slate-500">ชื่อผู้เบิก</span><span className="font-semibold text-slate-800">{pickedReq.requestedBy || "-"}</span></div>
+            <div className="flex justify-between text-sm"><span className="text-slate-500">จำนวนที่เบิก</span><span className="font-semibold text-slate-800">{pickedReq.qty} {item.unit}</span></div>
+            {(pickedReq.returnedQty || 0) > 0 && (
+              <div className="flex justify-between text-sm"><span className="text-slate-500">คืนแล้ว</span><span className="font-semibold text-emerald-700">{pickedReq.returnedQty} {item.unit}</span></div>
+            )}
+            <div className="flex justify-between text-sm"><span className="text-slate-500">แผนก</span><span className="font-semibold text-slate-800">{pickedReq.deptName}</span></div>
+            <div className="flex justify-between text-sm"><span className="text-slate-500">Line</span><span className="font-semibold text-slate-800">{pickedReq.line || "-"}</span></div>
+            <div className="flex justify-between text-sm"><span className="text-slate-500">เครื่องจักร</span><span className="font-semibold text-slate-800">{pickedReq.machine || "-"}</span></div>
+            <div className="flex justify-between text-sm"><span className="text-slate-500">วันที่เบิก</span><span className="font-semibold text-slate-800">{fmtDateTime(pickedReq.createdAt)}</span></div>
+            {pickedReq.note && <div className="text-xs italic text-slate-500 pt-1">"{pickedReq.note}"</div>}
+          </div>
+          <Field label="ชื่อผู้ขอคืน" value={returnBy} onChange={setReturnBy} placeholder="พิมพ์ชื่อผู้ขอคืน" />
+          <div>
+            <Field label={`จำนวนที่คืน — คืนได้อีก ${remaining} ${item.unit}`} type="number" value={returnQty} onChange={setReturnQty} />
+            {Number.isFinite(returnQtyNum) && returnQtyNum > remaining && (
+              <div className="text-xs text-red-500 mt-1">คืนเกินจำนวนที่เบิกไป</div>
+            )}
+          </div>
+          <div className="text-xs text-amber-600 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
+            คำขอจะถูกส่งให้แอดมินอนุมัติก่อน สต็อกจะเพิ่มกลับเมื่อได้รับอนุมัติแล้ว
+          </div>
+          <div className="flex gap-2 pt-1">
+            <button onClick={onClose} className="flex-1 py-2.5 rounded-xl border border-slate-200 text-sm font-medium text-slate-600 hover:bg-slate-50">ยกเลิก</button>
+            <button
+              onClick={submitReturnReq}
+              disabled={!returnValid}
+              className="flex-1 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              คืนของ
+            </button>
+          </div>
+        </div>
+        ) : (
         <div className="p-5 space-y-3">
           <Field label="ชื่อผู้เบิก" value={requestedBy} onChange={setRequestedBy} placeholder="พิมพ์ชื่อผู้เบิก" />
           <div>
@@ -2685,6 +2803,7 @@ function RequisitionDetail({ item, user, onSubmit, onClose, notify }) {
             </button>
           </div>
         </div>
+        )}
       </div>
     </div>
   );
