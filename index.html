@@ -1943,7 +1943,10 @@ function Requisitions({ requisitions, setRequisitions, items, setItems, user, pu
     if (qty > req.qty - already) { notify("error", "คืนเกินจำนวนที่เบิกไป"); return; }
     if (db.cloud) {
       db.requestReturn({ reqId: req.id, qty, requestedBy: returnedBy })
-        .then(() => notify("success", `ส่งคำขอคืน ${req.itemName} × ${qty} แล้ว รอแอดมินอนุมัติ`))
+        .then((row) => {
+          if (row) setRequisitions((prev) => prev.map((r) => (r.id === row.id ? row : r)));
+          notify("success", `ส่งคำขอคืน ${req.itemName} × ${qty} แล้ว รอแอดมินอนุมัติ`);
+        })
         .catch((e) => {
           const msg = String((e && e.message) || "");
           if (msg.includes("RETURN_PENDING")) notify("error", "รายการนี้มีคำขอคืนรออนุมัติอยู่แล้ว");
@@ -1962,7 +1965,11 @@ function Requisitions({ requisitions, setRequisitions, items, setItems, user, pu
     const qty = req.returnQtyRequested || 0;
     if (db.cloud) {
       const op = approve ? db.approveReturn(req.id) : db.rejectReturn(req.id);
-      op.then(() => notify("success", approve ? `อนุมัติคืน ${req.itemName} × ${qty} เข้าคลังแล้ว` : "ไม่อนุมัติคำขอคืนแล้ว"))
+      op.then((row) => {
+          if (row) setRequisitions((prev) => prev.map((r) => (r.id === row.id ? row : r)));
+          if (approve) setItems((prev) => prev.map((i) => (i.id === req.itemId ? { ...i, stock: i.stock + qty } : i)));
+          notify("success", approve ? `อนุมัติคืน ${req.itemName} × ${qty} เข้าคลังแล้ว` : "ไม่อนุมัติคำขอคืนแล้ว");
+        })
         .catch(() => notify("error", approve ? "อนุมัติไม่สำเร็จ" : "ปฏิเสธไม่สำเร็จ"));
       return;
     }
@@ -1985,7 +1992,13 @@ function Requisitions({ requisitions, setRequisitions, items, setItems, user, pu
     }
     if (db.cloud) {
       db.withdraw({ itemId: item.id, qty, deptId, deptName, line, machine, note, requestedBy })
-        .then(() => notify("success", `เบิก ${item.name} × ${qty} — ตัดสต็อกแล้ว`))
+        .then((row) => {
+          if (row) {
+            setRequisitions((prev) => [row, ...prev.filter((r) => r.id !== row.id)]);
+            setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, stock: Math.max(0, i.stock - qty) } : i)));
+          }
+          notify("success", `เบิก ${item.name} × ${qty} — ตัดสต็อกแล้ว`);
+        })
         .catch((e) => {
           const msg = String(e && e.message || "");
           if (msg.includes("INSUFFICIENT_STOCK")) notify("error", "สต็อกไม่พอ (มีคนเบิกตัดไปพร้อมกัน) กรุณาลองใหม่");
@@ -3059,7 +3072,8 @@ function PurchaseOrders({ purchaseOrders, setPurchaseOrders, items, setItems, us
               setShowNew(false);
               try {
                 const imageUrls = await db.uploadImages(files || []);
-                await db.createPO({ ...rest, requestedBy: user.name, imageUrls });
+                const created = await db.createPO({ ...rest, requestedBy: user.name, imageUrls });
+                if (created) setPurchaseOrders((prev) => [created, ...prev.filter((p) => p.id !== created.id)]);
                 if ((files || []).length > imageUrls.length) {
                   notify("error", `ส่งคำขอแล้ว แต่อัปโหลดรูปได้ ${imageUrls.length}/${files.length} ภาพ`);
                 } else {
