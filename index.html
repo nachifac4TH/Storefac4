@@ -210,7 +210,7 @@ try {
 }
 const itemFromRow = (r) => ({ id: r.id, sku: r.sku || "", name: r.name, unit: r.unit || "ชิ้น", stock: r.stock, minStock: r.min_stock, price: Number(r.price), category: r.category || "ทั่วไป", deptId: r.dept_id || "central", supplier: r.supplier || "" });
 const itemToRow = (i) => ({ sku: i.sku || "", name: i.name, unit: i.unit || "ชิ้น", stock: toNum(i.stock, 0), min_stock: toNum(i.minStock, 0), price: toNum(i.price, 0), category: i.category || "ทั่วไป", dept_id: i.deptId || "central", supplier: i.supplier || "" });
-const reqFromRow = (r) => ({ id: r.id, itemId: r.item_id, itemName: r.item_name, qty: r.qty, note: r.note || "", status: r.status, deptId: r.dept_id, deptName: r.dept_name, line: r.line || "", machine: r.machine || "", requestedBy: r.requested_by || "", returnedQty: r.returned_qty || 0, createdAt: new Date(r.created_at).getTime() });
+const reqFromRow = (r) => ({ id: r.id, itemId: r.item_id, itemName: r.item_name, qty: r.qty, note: r.note || "", status: r.status, deptId: r.dept_id, deptName: r.dept_name, line: r.line || "", machine: r.machine || "", requestedBy: r.requested_by || "", returnedQty: r.returned_qty || 0, returnStatus: r.return_status || "", returnQtyRequested: r.return_qty_requested || 0, returnRequestedBy: r.return_requested_by || "", createdAt: new Date(r.created_at).getTime() });
 const poFromRow = (r) => ({ id: r.id, itemId: r.item_id, itemName: r.item_name, qty: r.qty, unitPrice: Number(r.unit_price), note: r.note || "", status: r.status, deptId: r.dept_id, deptName: r.dept_name, requestedBy: r.requested_by, line: r.line || "", machine: r.machine || "", urgent: !!r.urgent, imageUrls: r.image_urls || [], imageCount: (r.image_urls || []).length, createdAt: new Date(r.created_at).getTime() });
 const LS_PREFIX = "nachi_store_";
 async function localLoadAll() {
@@ -321,11 +321,23 @@ const db = {
     const { error } = await sb.from("items").delete().eq("id", id);
     if (error) throw error;
   },
-  async returnItem({ reqId, qty, returnedBy }) {
+  async requestReturn({ reqId, qty, requestedBy }) {
     if (!CLOUD) return null;
-    const { data, error } = await sb.rpc("return_item", {
-      p_req_id: reqId, p_qty: qty, p_returned_by: returnedBy || "",
+    const { data, error } = await sb.rpc("request_return", {
+      p_req_id: reqId, p_qty: qty, p_by: requestedBy || "",
     });
+    if (error) throw error;
+    return data ? reqFromRow(Array.isArray(data) ? data[0] : data) : null;
+  },
+  async approveReturn(reqId) {
+    if (!CLOUD) return null;
+    const { data, error } = await sb.rpc("approve_return", { p_req_id: reqId });
+    if (error) throw error;
+    return data ? reqFromRow(Array.isArray(data) ? data[0] : data) : null;
+  },
+  async rejectReturn(reqId) {
+    if (!CLOUD) return null;
+    const { data, error } = await sb.rpc("reject_return", { p_req_id: reqId });
     if (error) throw error;
     return data ? reqFromRow(Array.isArray(data) ? data[0] : data) : null;
   },
@@ -1921,20 +1933,40 @@ function Requisitions({ requisitions, setRequisitions, items, setItems, user, pu
     const already = req.returnedQty || 0;
     if (qty > req.qty - already) { notify("error", "คืนเกินจำนวนที่เบิกไป"); return; }
     if (db.cloud) {
-      db.returnItem({ reqId: req.id, qty, returnedBy })
-        .then(() => notify("success", `คืน ${req.itemName} × ${qty} เข้าคลังแล้ว`))
+      db.requestReturn({ reqId: req.id, qty, requestedBy: returnedBy })
+        .then(() => notify("success", `ส่งคำขอคืน ${req.itemName} × ${qty} แล้ว รอแอดมินอนุมัติ`))
         .catch((e) => {
           const msg = String((e && e.message) || "");
-          if (msg.includes("RETURN_TOO_MANY")) notify("error", "คืนเกินจำนวนที่เบิกไป (มีคนคืนไปแล้ว) กรุณาลองใหม่");
-          else notify("error", "บันทึกการคืนไม่สำเร็จ");
+          if (msg.includes("RETURN_PENDING")) notify("error", "รายการนี้มีคำขอคืนรออนุมัติอยู่แล้ว");
+          else if (msg.includes("RETURN_TOO_MANY")) notify("error", "คืนเกินจำนวนที่เบิกไป");
+          else notify("error", "ส่งคำขอคืนไม่สำเร็จ");
         });
       setReturning(null);
       return;
     }
-    setItems((prev) => prev.map((i) => (i.id === req.itemId ? { ...i, stock: i.stock + qty } : i)));
-    setRequisitions((prev) => prev.map((r) => (r.id === req.id ? { ...r, returnedQty: already + qty } : r)));
+    setRequisitions((prev) => prev.map((r) =>
+      r.id === req.id ? { ...r, returnStatus: "pending", returnQtyRequested: qty, returnRequestedBy: returnedBy } : r));
     setReturning(null);
-    notify("success", `คืน ${req.itemName} × ${qty} เข้าคลังแล้ว`);
+    notify("success", `ส่งคำขอคืน ${req.itemName} × ${qty} แล้ว รอแอดมินอนุมัติ`);
+  };
+  const decideReturn = (req, approve) => {
+    const qty = req.returnQtyRequested || 0;
+    if (db.cloud) {
+      const op = approve ? db.approveReturn(req.id) : db.rejectReturn(req.id);
+      op.then(() => notify("success", approve ? `อนุมัติคืน ${req.itemName} × ${qty} เข้าคลังแล้ว` : "ไม่อนุมัติคำขอคืนแล้ว"))
+        .catch(() => notify("error", approve ? "อนุมัติไม่สำเร็จ" : "ปฏิเสธไม่สำเร็จ"));
+      return;
+    }
+    if (approve) {
+      setItems((prev) => prev.map((i) => (i.id === req.itemId ? { ...i, stock: i.stock + qty } : i)));
+      setRequisitions((prev) => prev.map((r) =>
+        r.id === req.id ? { ...r, returnedQty: (r.returnedQty || 0) + qty, returnStatus: "approved", returnQtyRequested: 0 } : r));
+      notify("success", `อนุมัติคืน ${req.itemName} × ${qty} เข้าคลังแล้ว`);
+    } else {
+      setRequisitions((prev) => prev.map((r) =>
+        r.id === req.id ? { ...r, returnStatus: "rejected", returnQtyRequested: 0 } : r));
+      notify("success", "ไม่อนุมัติคำขอคืนแล้ว");
+    }
   };
   const submitWithdraw = ({ item, qty, deptId, deptName, line, machine, note, requestedBy }) => {
     const current = items.find((i) => i.id === item.id);
@@ -2223,18 +2255,50 @@ function Requisitions({ requisitions, setRequisitions, items, setItems, user, pu
                         คืนแล้ว {r.returnedQty}
                       </span>
                     )}
+                    {r.returnStatus === "rejected" && (
+                      <span className={`px-2 py-1 rounded-full text-[11px] font-semibold ${dark ? "bg-red-500/15 text-red-300" : "bg-red-50 text-red-600"}`}>
+                        คำขอคืนถูกปฏิเสธ
+                      </span>
+                    )}
                     <Badge status={r.status} />
-                    {r.qty - (r.returnedQty || 0) > 0 && (
+                    {/* Pending return request */}
+                    {r.returnStatus === "pending" && (
+                      isAdmin ? (
+                        <>
+                          <span className="px-2 py-1 rounded-full text-[11px] font-semibold bg-amber-100 text-amber-700 whitespace-nowrap">
+                            ขอคืน {r.returnQtyRequested}{r.returnRequestedBy ? ` · ${r.returnRequestedBy}` : ""}
+                          </span>
+                          <button
+                            onClick={() => decideReturn(r, true)}
+                            className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-600 text-white hover:bg-emerald-500 whitespace-nowrap"
+                          >
+                            <Check size={13} strokeWidth={3} /> อนุมัติคืน
+                          </button>
+                          <button
+                            onClick={() => decideReturn(r, false)}
+                            className="px-3 py-1.5 rounded-lg text-xs font-semibold text-red-600 bg-red-50 hover:bg-red-100 whitespace-nowrap"
+                          >
+                            ไม่อนุมัติ
+                          </button>
+                        </>
+                      ) : (
+                        <span className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold whitespace-nowrap ${dark ? "bg-amber-500/15 text-amber-300" : "bg-amber-50 text-amber-700"}`}>
+                          <Clock size={11} /> รออนุมัติคืน {r.returnQtyRequested}
+                        </span>
+                      )
+                    )}
+                    {/* Departments ask; admins never request on their behalf */}
+                    {!isAdmin && r.returnStatus !== "pending" && r.qty - (r.returnedQty || 0) > 0 && (
                       <button
                         onClick={() => setReturning(r)}
-                        title="ขอคืนของเข้าคลัง"
+                        title="ส่งคำขอคืนของเข้าคลัง"
                         className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
                           dark
                             ? "bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25"
                             : "bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
                         }`}
                       >
-                        คืนของ
+                        ขอคืนของ
                       </button>
                     )}
                     {isAdmin && (
@@ -2482,7 +2546,7 @@ function ReturnModal({ req, onSubmit, onClose, notify }) {
   const over = Number.isFinite(qtyNum) && qtyNum > remaining;
   const valid = Number.isFinite(qtyNum) && qtyNum > 0 && qtyNum <= remaining && returnedBy.trim().length > 0;
   const handle = () => {
-    if (!returnedBy.trim()) { notify?.("error", "กรุณากรอกชื่อผู้คืน"); return; }
+    if (!returnedBy.trim()) { notify?.("error", "กรุณากรอกชื่อผู้ขอคืน"); return; }
     if (!Number.isFinite(qtyNum) || qtyNum <= 0) { notify?.("error", "กรุณากรอกจำนวนที่คืน"); return; }
     if (qtyNum > remaining) { notify?.("error", `คืนได้อีกไม่เกิน ${remaining} ชิ้น`); return; }
     onSubmit({ req, qty: qtyNum, returnedBy: returnedBy.trim() });
@@ -2491,7 +2555,7 @@ function ReturnModal({ req, onSubmit, onClose, notify }) {
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={onClose}>
       <div className="bg-white rounded-2xl w-full max-w-md overflow-hidden max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="p-5 border-b border-slate-100">
-          <h3 className="font-semibold text-slate-800 text-lg leading-tight">คืนของเข้าคลัง</h3>
+          <h3 className="font-semibold text-slate-800 text-lg leading-tight">ขอคืนของเข้าคลัง</h3>
           <div className="text-sm text-slate-600 mt-1">{req.itemName}</div>
           <div className="text-xs text-slate-400 mt-0.5">
             {req.requestedBy ? `เบิกโดย ${req.requestedBy} · ` : ""}{req.deptName}
@@ -2513,12 +2577,14 @@ function ReturnModal({ req, onSubmit, onClose, notify }) {
           </div>
         </div>
         <div className="p-5 space-y-3">
-          <Field label="ชื่อผู้คืน" value={returnedBy} onChange={setReturnedBy} placeholder="พิมพ์ชื่อผู้คืนของ" />
+          <Field label="ชื่อผู้ขอคืน" value={returnedBy} onChange={setReturnedBy} placeholder="พิมพ์ชื่อผู้ขอคืน" />
           <div>
-            <Field label={`จำนวนที่คืน — สูงสุด ${remaining}`} type="number" value={qty} onChange={setQty} />
+            <Field label={`จำนวนที่ขอคืน — สูงสุด ${remaining}`} type="number" value={qty} onChange={setQty} />
             {over && <div className="text-xs text-red-500 mt-1">คืนเกินจำนวนที่เบิกไป</div>}
           </div>
-          <div className="text-xs text-slate-400">ของจะถูกบวกกลับเข้าสต็อกทันทีเมื่อยืนยัน</div>
+          <div className="text-xs text-amber-600 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
+            คำขอจะถูกส่งให้แอดมินอนุมัติก่อน สต็อกจะเพิ่มกลับเมื่อได้รับอนุมัติแล้ว
+          </div>
           <div className="flex gap-2 pt-1">
             <button onClick={onClose} className="flex-1 py-2.5 rounded-xl border border-slate-200 text-sm font-medium text-slate-600 hover:bg-slate-50">ยกเลิก</button>
             <button
@@ -2526,7 +2592,7 @@ function ReturnModal({ req, onSubmit, onClose, notify }) {
               disabled={!valid}
               className="flex-1 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              ยืนยันคืนของ
+              ส่งคำขอคืนของ
             </button>
           </div>
         </div>
