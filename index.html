@@ -384,7 +384,7 @@ const db = {
     if (!CLOUD) return null;
     const row = {
       item_id: po.itemId, item_name: po.itemName, qty: po.qty, unit_price: po.unitPrice,
-      note: po.note || "", status: "pending_approval", dept_id: po.deptId, dept_name: po.deptName,
+      note: po.note || "", status: po.status || "pending_approval", dept_id: po.deptId, dept_name: po.deptName,
       requested_by: po.requestedBy, line: po.line || "", machine: po.machine || "",
       image_urls: po.imageUrls || [], urgent: !!po.urgent,
     };
@@ -1195,12 +1195,15 @@ function Dashboard({ items, requisitions, purchaseOrders, user, notify, dark }) 
   const rowDivide = dark ? "divide-white/5" : "divide-slate-50";
   const borderCol = dark ? "border-white/10" : "border-slate-100";
   const myItems = visibleItems(items, user);
-  const lowStock = myItems.filter((i) => i.stock <= i.minStock);
+  const outStock = myItems.filter((i) => i.stock <= 0);
+  const lowStock = myItems.filter((i) => i.stock > 0 && i.stock <= i.minStock);
+  const alertItems = [...outStock, ...lowStock];
   const myReqs = requisitions.filter((r) => r.deptId === user.id);
   const openStatuses = ["pending_approval", "awaiting_order", "awaiting_supplier", "awaiting_import"];
   const pendingPOApproval = purchaseOrders.filter((p) => p.status === "pending_approval" && (isAdmin || p.deptId === user.id));
   const openPOs = purchaseOrders.filter((p) => openStatuses.includes(p.status) && (isAdmin || p.deptId === user.id));
   const cards = [
+    { label: "สินค้าหมดคลัง", value: outStock.length, icon: AlertTriangle, color: "#DC2626" },
     { label: "สินค้าใกล้หมด", value: lowStock.length, icon: TrendingDown, color: "#B45309" },
     { label: isAdmin ? "รออนุมัติสั่งซื้อ" : "รออนุมัติสั่งซื้อ", value: pendingPOApproval.length, icon: Clock, color: "#B45309" },
     { label: "สั่งซื้อค้างรับ", value: openPOs.length, icon: ShoppingCart, color: "#5B21B6" },
@@ -1223,6 +1226,39 @@ function Dashboard({ items, requisitions, purchaseOrders, user, notify, dark }) 
     };
   });
   const maxReq = Math.max(1, ...deptStats.map((s) => s.reqTotal));
+  const priceOf = (itemId) => {
+    const it = items.find((i) => i.id === itemId);
+    return it ? Number(it.price) || 0 : 0;
+  };
+  const costRows = React.useMemo(() => {
+    const rows = {};
+    const touch = (id, name) => {
+      if (!rows[id]) rows[id] = { id, name, reqQty: 0, reqValue: 0, poCount: 0, poValue: 0, poReceived: 0 };
+      return rows[id];
+    };
+    DEPARTMENTS.forEach((d) => touch(d.id, d.name));
+    touch("admin", "Admin (สั่งเอง)");
+    requisitions.forEach((r) => {
+      const net = r.qty - (r.returnedQty || 0);          // returns give the money back
+      if (net <= 0) return;
+      const row = touch(r.deptId, r.deptName || r.deptId);
+      row.reqQty += net;
+      row.reqValue += net * priceOf(r.itemId);
+    });
+    purchaseOrders.forEach((p) => {
+      if (p.status === "rejected") return;
+      const row = touch(p.deptId, p.deptName || p.deptId);
+      const value = (Number(p.qty) || 0) * (Number(p.unitPrice) || 0);
+      row.poCount += 1;
+      row.poValue += value;
+      if (p.status === "received") row.poReceived += value;
+    });
+    return Object.values(rows).filter((r) => r.reqValue > 0 || r.poValue > 0 || DEPARTMENTS.some((d) => d.id === r.id));
+  }, [requisitions, purchaseOrders, items]);
+  const costTotal = costRows.reduce(
+    (a, r) => ({ reqValue: a.reqValue + r.reqValue, poValue: a.poValue + r.poValue, poReceived: a.poReceived + r.poReceived }),
+    { reqValue: 0, poValue: 0, poReceived: 0 }
+  );
   return (
     <div className="space-y-6">
       {isAdmin && (
@@ -1275,26 +1311,91 @@ function Dashboard({ items, requisitions, purchaseOrders, user, notify, dark }) 
           </div>
         </div>
       )}
-      {lowStock.length > 0 && (
+      {isAdmin && (
         <div className={`rounded-2xl border overflow-hidden ${card}`}>
           <div className={`px-5 py-4 border-b flex items-center gap-2 ${borderCol}`}>
-            <AlertTriangle size={16} className="text-amber-500" />
-            <h3 className={`font-medium text-sm ${headText}`}>สินค้าใกล้หมดสต็อก</h3>
+            <FileText size={16} className="text-[#1E3A5F]" />
+            <h3 className={`font-medium text-sm ${headText}`}>ค่าใช้จ่ายแยกตามแผนก</h3>
           </div>
-          <div className={`divide-y ${rowDivide}`}>
-            {lowStock.map((i) => (
-              <div key={i.id} className="px-5 py-3 flex items-center justify-between">
-                <div>
-                  <div className={`text-sm font-medium ${dark ? "text-slate-200" : "text-slate-700"}`}>{i.name}</div>
-                  <div className={`text-xs ${subText}`}>{i.sku} · {i.category}{i.supplier ? ` · ${i.supplier}` : ""}</div>
-                </div>
-                <div className="text-right">
-                  <div className="text-sm font-semibold text-amber-500">{i.stock} {i.unit}</div>
-                  <div className={`text-xs ${subText}`}>ขั้นต่ำ {i.minStock}</div>
-                </div>
-              </div>
-            ))}
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className={`text-xs ${subText} border-b ${borderCol}`}>
+                  <th className="text-left font-medium px-5 py-2.5">แผนก</th>
+                  <th className="text-right font-medium px-3 py-2.5 whitespace-nowrap">เบิกของ (ชิ้น)</th>
+                  <th className="text-right font-medium px-3 py-2.5 whitespace-nowrap">มูลค่าเบิก</th>
+                  <th className="text-right font-medium px-3 py-2.5 whitespace-nowrap">สั่งซื้อ (รายการ)</th>
+                  <th className="text-right font-medium px-3 py-2.5 whitespace-nowrap">มูลค่าสั่งซื้อ</th>
+                  <th className="text-right font-medium px-5 py-2.5 whitespace-nowrap">รับของแล้ว</th>
+                </tr>
+              </thead>
+              <tbody className={`divide-y ${rowDivide}`}>
+                {costRows.map((r) => {
+                  const dept = DEPARTMENTS.find((d) => d.id === r.id);
+                  return (
+                    <tr key={r.id}>
+                      <td className="px-5 py-3">
+                        <div className="flex items-center gap-2">
+                          <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: dept ? dept.color : "#065F46" }} />
+                          <span className={`font-medium ${dark ? "text-slate-200" : "text-slate-700"}`}>{r.name}</span>
+                        </div>
+                      </td>
+                      <td className={`px-3 py-3 text-right ${subText}`}>{r.reqQty.toLocaleString()}</td>
+                      <td className={`px-3 py-3 text-right font-semibold ${dark ? "text-slate-100" : "text-slate-800"}`}>฿{fmtMoney(r.reqValue)}</td>
+                      <td className={`px-3 py-3 text-right ${subText}`}>{r.poCount.toLocaleString()}</td>
+                      <td className={`px-3 py-3 text-right font-semibold ${dark ? "text-slate-100" : "text-slate-800"}`}>฿{fmtMoney(r.poValue)}</td>
+                      <td className="px-5 py-3 text-right font-semibold text-emerald-600">฿{fmtMoney(r.poReceived)}</td>
+                    </tr>
+                  );
+                })}
+                <tr className={dark ? "bg-white/[0.04]" : "bg-slate-50"}>
+                  <td className={`px-5 py-3 font-bold ${headText}`}>รวมทั้งหมด</td>
+                  <td></td>
+                  <td className={`px-3 py-3 text-right font-bold ${headText}`}>฿{fmtMoney(costTotal.reqValue)}</td>
+                  <td></td>
+                  <td className={`px-3 py-3 text-right font-bold ${headText}`}>฿{fmtMoney(costTotal.poValue)}</td>
+                  <td className="px-5 py-3 text-right font-bold text-emerald-600">฿{fmtMoney(costTotal.poReceived)}</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
+          <div className={`px-5 py-2.5 text-xs ${subText}`}>
+            มูลค่าเบิกคำนวณจากราคาต่อหน่วยปัจจุบัน และหักรายการที่คืนแล้วออก
+          </div>
+        </div>
+      )}
+      {alertItems.length > 0 && (
+        <div className={`rounded-2xl border overflow-hidden ${card}`}>
+          <div className={`px-5 py-4 border-b flex flex-wrap items-center gap-2 ${borderCol}`}>
+            <AlertTriangle size={16} className="text-red-500" />
+            <h3 className={`font-medium text-sm ${headText}`}>สินค้าที่ต้องสั่งเพิ่ม</h3>
+            <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-red-100 text-red-700">หมดคลัง {outStock.length}</span>
+            <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-100 text-amber-700">ใกล้หมด {lowStock.length}</span>
+          </div>
+          <div className={`divide-y ${rowDivide} max-h-[420px] overflow-y-auto`}>
+            {alertItems.slice(0, 100).map((i) => {
+              const isOut = i.stock <= 0;
+              return (
+                <div key={i.id} className="px-5 py-3 flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className={`text-sm font-medium truncate ${dark ? "text-slate-200" : "text-slate-700"}`}>{i.name}</div>
+                    <div className={`text-xs truncate ${subText}`}>{i.sku} · {i.category}{i.supplier ? ` · ${i.supplier}` : ""}</div>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-bold ${
+                      isOut ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-700"
+                    }`}>
+                      {isOut ? "หมดคลัง" : `เหลือ ${i.stock} ${i.unit}`}
+                    </span>
+                    <div className={`text-xs mt-0.5 ${subText}`}>ขั้นต่ำ {i.minStock}</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          {alertItems.length > 100 && (
+            <div className={`px-5 py-2.5 text-xs ${subText}`}>แสดง 100 จาก {alertItems.length} รายการ — ดูทั้งหมดในแท็บคลังสินค้า</div>
+          )}
         </div>
       )}
       {!isAdmin && (
@@ -2670,7 +2771,9 @@ function RequisitionDetail({ item, user, onSubmit, onClose, notify, openReqs = [
   const overStock = Number.isFinite(qtyNum) && qtyNum > item.stock;
   const valid = Number.isFinite(qtyNum) && qtyNum > 0 && qtyNum <= item.stock && requestedBy.trim().length > 0 && !!line && !!machine;
   const low = item.stock <= item.minStock;
-  const deptName = (DEPARTMENTS.find((d) => d.id === deptId) || {}).name || deptId;
+  const deptName = deptId === "admin"
+    ? "Admin (สั่งเข้าคลัง)"
+    : ((DEPARTMENTS.find((d) => d.id === deptId) || {}).name || deptId);
   const handleSubmit = () => {
     if (!requestedBy.trim()) { notify?.("error", "กรุณากรอกชื่อผู้เบิก"); return; }
     if (!Number.isFinite(qtyNum) || qtyNum <= 0) { notify?.("error", "กรุณากรอกจำนวนที่ต้องการเบิก"); return; }
@@ -2968,14 +3071,13 @@ function PurchaseOrders({ purchaseOrders, setPurchaseOrders, items, setItems, us
               className={`w-full pl-9 pr-3 py-2.5 rounded-xl border text-sm focus:outline-none focus:ring-2 ${dark ? "bg-white/5 border-white/10 text-white placeholder-slate-500 focus:ring-[#7FD4A8]/30" : "border-slate-200 focus:ring-[#1E3A5F]/20"}`}
             />
           </div>
-          {!isAdmin && (
-            <button
-              onClick={() => setShowNew(true)}
-              className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-[#1E3A5F] text-white text-sm font-medium hover:bg-[#16304F] transition-colors shrink-0"
-            >
-              <Plus size={15} /> สั่งซื้อ
-            </button>
-          )}
+          <button
+            onClick={() => setShowNew(true)}
+            title={isAdmin ? "สั่งซื้อเข้าคลังเอง (ไม่ต้องรออนุมัติ)" : "ส่งคำขอสั่งซื้อ"}
+            className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-[#1E3A5F] text-white text-sm font-medium hover:bg-[#16304F] transition-colors shrink-0"
+          >
+            <Plus size={15} /> {isAdmin ? "สั่งซื้อเข้าคลัง" : "สั่งซื้อ"}
+          </button>
           {isAdmin && sorted.length > 0 && (
             <button
               onClick={clearPOs}
@@ -3082,26 +3184,28 @@ function PurchaseOrders({ purchaseOrders, setPurchaseOrders, items, setItems, us
           onClose={() => setShowNew(false)}
           onSave={async (data) => {
             const { files, imageCount, ...rest } = data;
+            const status = isAdmin ? "awaiting_order" : "pending_approval";
+            const okMsg = isAdmin ? "บันทึกรายการสั่งซื้อแล้ว — กด \"ได้รับของแล้ว\" เมื่อของมาถึงเพื่อเพิ่มสต็อก" : "ส่งคำขอสั่งซื้อแล้ว รออนุมัติ";
             if (db.cloud) {
               setShowNew(false);
               try {
                 const imageUrls = await db.uploadImages(files || []);
-                const created = await db.createPO({ ...rest, requestedBy: user.name, imageUrls });
+                const created = await db.createPO({ ...rest, status, requestedBy: user.name, imageUrls });
                 if (created) setPurchaseOrders((prev) => [created, ...prev.filter((p) => p.id !== created.id)]);
                 if ((files || []).length > imageUrls.length) {
-                  notify("error", `ส่งคำขอแล้ว แต่อัปโหลดรูปได้ ${imageUrls.length}/${files.length} ภาพ`);
+                  notify("error", `บันทึกแล้ว แต่อัปโหลดรูปได้ ${imageUrls.length}/${files.length} ภาพ`);
                 } else {
-                  notify("success", "ส่งคำขอสั่งซื้อแล้ว รออนุมัติ");
+                  notify("success", okMsg);
                 }
-              } catch (e) { notify("error", "ส่งคำขอไม่สำเร็จ: " + (e && e.message ? e.message : "")); }
+              } catch (e) { notify("error", "บันทึกไม่สำเร็จ: " + (e && e.message ? e.message : "")); }
               return;
             }
             setPurchaseOrders((prev) => [
-              { id: uid(), status: "pending_approval", createdAt: Date.now(), requestedBy: user.name, imageCount, ...rest },
+              { id: uid(), status, createdAt: Date.now(), requestedBy: user.name, imageCount, ...rest },
               ...prev,
             ]);
             setShowNew(false);
-            notify("success", "ส่งคำขอสั่งซื้อแล้ว รออนุมัติ");
+            notify("success", okMsg);
           }}
         />
       )}
@@ -3139,7 +3243,8 @@ function PurchaseOrders({ purchaseOrders, setPurchaseOrders, items, setItems, us
   );
 }
 function NewPOForm({ items, user, onSave, onClose, notify }) {
-  const defaultDept = user.id === "admin" ? DEPARTMENTS[0].id : user.id;
+  const isAdminBuy = user.id === "admin";
+  const defaultDept = isAdminBuy ? "admin" : user.id;
   const uniqueItems = React.useMemo(() => {
     const seen = new Set();
     return items.filter((i) => (seen.has(i.id) ? false : (seen.add(i.id), true)));
@@ -3162,9 +3267,10 @@ function NewPOForm({ items, user, onSave, onClose, notify }) {
   const qtyNum = toNum(qty, NaN);
   const deptName = (DEPARTMENTS.find((d) => d.id === deptId) || {}).name || deptId;
   const priceNum = customMode ? toNum(customPrice, 0) : (item ? item.price : 0);
+  const placeOk = isAdminBuy || (line && machine);
   const valid = customMode
-    ? customName.trim().length > 0 && Number.isFinite(qtyNum) && qtyNum > 0 && line && machine && images.length > 0
-    : item && Number.isFinite(qtyNum) && qtyNum > 0 && line && machine;
+    ? customName.trim().length > 0 && Number.isFinite(qtyNum) && qtyNum > 0 && placeOk && images.length > 0
+    : item && Number.isFinite(qtyNum) && qtyNum > 0 && placeOk;
   useEffect(() => {
     const onDoc = (e) => { if (pickerRef.current && !pickerRef.current.contains(e.target)) setPickerOpen(false); };
     document.addEventListener("mousedown", onDoc);
@@ -3193,7 +3299,7 @@ function NewPOForm({ items, user, onSave, onClose, notify }) {
       notify?.("error", "กรุณาเลือกสินค้า"); return;
     }
     if (!Number.isFinite(qtyNum) || qtyNum <= 0) { notify?.("error", "จำนวนที่สั่งต้องมากกว่า 0"); return; }
-    if (!line || !machine) { notify?.("error", "กรุณาเลือก Line และเครื่องจักร"); return; }
+    if (!isAdminBuy && (!line || !machine)) { notify?.("error", "กรุณาเลือก Line และเครื่องจักร"); return; }
     onSave({
       itemId: customMode ? null : item.id,
       itemName: customMode ? customName.trim() : item.name,
@@ -3282,7 +3388,24 @@ function NewPOForm({ items, user, onSave, onClose, notify }) {
             {Number.isFinite(qtyNum) && qtyNum > 0 && priceNum > 0 && (
               <div className="text-xs text-slate-400">ราคา/หน่วย ฿{fmtMoney(priceNum)} · รวม ฿{fmtMoney(priceNum * qtyNum)}</div>
             )}
-            <DeptLineMachineFields user={user} deptId={deptId} setDeptId={setDeptId} line={line} setLine={setLine} machine={machine} setMachine={setMachine} />
+            {isAdminBuy ? (
+              <label className="block">
+                <span className="text-xs text-slate-500 mb-1 block">สั่งให้แผนก</span>
+                <select
+                  value={deptId}
+                  onChange={(e) => setDeptId(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm text-slate-800 bg-slate-50 focus:outline-none focus:ring-2 focus:ring-[#1E3A5F]/20"
+                >
+                  <option value="admin">Admin (สั่งเข้าคลังส่วนกลาง)</option>
+                  {DEPARTMENTS.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                </select>
+                <span className="text-[11px] text-slate-400 mt-1 block">
+                  ไม่ต้องรออนุมัติ — กด "ได้รับของแล้ว" เมื่อของมาถึงเพื่อเพิ่มสต็อก
+                </span>
+              </label>
+            ) : (
+              <DeptLineMachineFields user={user} deptId={deptId} setDeptId={setDeptId} line={line} setLine={setLine} machine={machine} setMachine={setMachine} />
+            )}
             {/* Urgent order toggle */}
             <button
               type="button"
