@@ -1009,7 +1009,7 @@ function FaceScan({ onVerified, onBack }) {
   );
 }
 function DeptStatusCard({ stat, maxReq }) {
-  const { dept, pending, pendingItems, lowStock: low, lowItems, openPO, openPOItems, reqTotal } = stat;
+  const { dept, pending, pendingItems, lowStock: low, lowItems, outStock: out, outItems, openPO, openPOItems, reqTotal } = stat;
   const [open, setOpen] = useState(null); // "pending" | "low" | "po" | null
   const Icon = DEPT_ICON[dept.icon] || Package;
   const toggle = (key) => setOpen((cur) => (cur === key ? null : key));
@@ -1030,8 +1030,23 @@ function DeptStatusCard({ stat, maxReq }) {
       </button>
       {open === rowKey && count > 0 && (
         <div className={`ml-1 pl-3 border-l-2 ${accentBorder} space-y-1.5 py-1`}>
+          {rowKey === "out" &&
+            outItems.slice(0, 50).map((i) => (
+              <div key={i.id} className="flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="text-xs font-medium text-slate-700 truncate">{i.name}</div>
+                  <div className="text-[10px] text-slate-400">
+                    {i.sku}
+                    <span className="ml-1 px-1 py-0.5 rounded" style={{ color: itemDeptColor(i.deptId), background: `${itemDeptColor(i.deptId)}12` }}>
+                      {itemDeptName(i.deptId)}
+                    </span>
+                  </div>
+                </div>
+                <span className="text-[10px] font-bold text-red-600 bg-red-50 px-1.5 py-0.5 rounded shrink-0">หมด</span>
+              </div>
+            ))}
           {rowKey === "low" &&
-            lowItems.map((i) => (
+            lowItems.slice(0, 50).map((i) => (
               <div key={i.id} className="flex items-center justify-between gap-2">
                 <div className="min-w-0">
                   <div className="text-xs font-medium text-slate-700 truncate">{i.name}</div>
@@ -1085,7 +1100,8 @@ function DeptStatusCard({ stat, maxReq }) {
       </div>
       <div className="space-y-2">
         <Row rowKey="pending" icon={Clock} iconClass="text-amber-600" label="รออนุมัติ" count={pending} badgeClass="bg-amber-100 text-amber-700" accentBorder="border-amber-100" />
-        <Row rowKey="low" icon={TrendingDown} iconClass="text-red-500" label="ใกล้หมดคลัง" count={low} badgeClass="bg-red-100 text-red-600" accentBorder="border-red-100" />
+        <Row rowKey="out" icon={AlertTriangle} iconClass="text-red-500" label="สินค้าหมดคลัง" count={out} badgeClass="bg-red-100 text-red-600" accentBorder="border-red-100" />
+        <Row rowKey="low" icon={TrendingDown} iconClass="text-amber-500" label="ใกล้หมดคลัง" count={low} badgeClass="bg-amber-100 text-amber-700" accentBorder="border-amber-100" />
         <Row rowKey="po" icon={ShoppingCart} iconClass="text-violet-600" label="สั่งซื้อค้างรับ" count={openPO} badgeClass="bg-violet-100 text-violet-700" accentBorder="border-violet-100" />
       </div>
       <div className="mt-4">
@@ -1211,7 +1227,8 @@ function Dashboard({ items, requisitions, purchaseOrders, user, notify, dark }) 
   ];
   const deptStats = DEPARTMENTS.map((d) => {
     const deptItems = items.filter((i) => i.deptId === "central" || i.deptId === d.id);
-    const lowItems = deptItems.filter((i) => i.stock <= i.minStock);
+    const outItems = deptItems.filter((i) => i.stock <= 0);
+    const lowItems = deptItems.filter((i) => i.stock > 0 && i.stock <= i.minStock);
     const pendingItems = purchaseOrders.filter((p) => p.deptId === d.id && p.status === "pending_approval");
     const openPOItems = purchaseOrders.filter((p) => p.deptId === d.id && openStatuses.includes(p.status));
     return {
@@ -1220,6 +1237,8 @@ function Dashboard({ items, requisitions, purchaseOrders, user, notify, dark }) 
       pendingItems,
       lowStock: lowItems.length,
       lowItems,
+      outStock: outItems.length,
+      outItems,
       openPO: openPOItems.length,
       openPOItems,
       reqTotal: requisitions.filter((r) => r.deptId === d.id).length,
