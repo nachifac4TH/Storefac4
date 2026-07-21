@@ -1210,6 +1210,8 @@ function Dashboard({ items, requisitions, purchaseOrders, user, notify, dark }) 
   const bigText = dark ? "text-white" : "text-slate-800";
   const rowDivide = dark ? "divide-white/5" : "divide-slate-50";
   const borderCol = dark ? "border-white/10" : "border-slate-100";
+  const [costPeriod, setCostPeriod] = useState("month"); // month | year | all
+  const [costDept, setCostDept] = useState("all");
   const myItems = visibleItems(items, user);
   const outStock = myItems.filter((i) => i.stock <= 0);
   const lowStock = myItems.filter((i) => i.stock > 0 && i.stock <= i.minStock);
@@ -1249,6 +1251,15 @@ function Dashboard({ items, requisitions, purchaseOrders, user, notify, dark }) 
     const it = items.find((i) => i.id === itemId);
     return it ? Number(it.price) || 0 : 0;
   };
+  const costInPeriod = (ts) => {
+    if (costPeriod === "all") return true;
+    const d = new Date(ts);
+    const now = new Date();
+    if (costPeriod === "month") return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+    return d.getFullYear() === now.getFullYear();   // "year"
+  };
+  const costReqs = requisitions.filter((r) => costInPeriod(r.createdAt));
+  const costPOs = purchaseOrders.filter((p) => costInPeriod(p.createdAt));
   const costRows = React.useMemo(() => {
     const rows = {};
     const touch = (id, name) => {
@@ -1257,14 +1268,14 @@ function Dashboard({ items, requisitions, purchaseOrders, user, notify, dark }) 
     };
     DEPARTMENTS.forEach((d) => touch(d.id, d.name));
     touch("admin", "Admin (สั่งเอง)");
-    requisitions.forEach((r) => {
+    costReqs.forEach((r) => {
       const net = r.qty - (r.returnedQty || 0);          // returns give the money back
       if (net <= 0) return;
       const row = touch(r.deptId, r.deptName || r.deptId);
       row.reqQty += net;
       row.reqValue += net * priceOf(r.itemId);
     });
-    purchaseOrders.forEach((p) => {
+    costPOs.forEach((p) => {
       if (p.status === "rejected") return;
       const row = touch(p.deptId, p.deptName || p.deptId);
       const value = (Number(p.qty) || 0) * (Number(p.unitPrice) || 0);
@@ -1272,8 +1283,39 @@ function Dashboard({ items, requisitions, purchaseOrders, user, notify, dark }) 
       row.poValue += value;
       if (p.status === "received") row.poReceived += value;
     });
-    return Object.values(rows).filter((r) => r.reqValue > 0 || r.poValue > 0 || DEPARTMENTS.some((d) => d.id === r.id));
-  }, [requisitions, purchaseOrders, items]);
+    return Object.values(rows)
+      .filter((r) => r.reqValue > 0 || r.poValue > 0 || DEPARTMENTS.some((d) => d.id === r.id))
+      .filter((r) => costDept === "all" || r.id === costDept);
+  }, [requisitions, purchaseOrders, items, costPeriod, costDept]);
+  const monthlyCost = React.useMemo(() => {
+    const months = [];
+    const now = new Date();
+    for (let k = 11; k >= 0; k--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - k, 1);
+      months.push({ key: `${d.getFullYear()}-${d.getMonth()}`, label: d.toLocaleDateString("th-TH", { month: "short", year: "2-digit" }), req: 0, po: 0 });
+    }
+    const idx = {};
+    months.forEach((m, n) => { idx[m.key] = n; });
+    const bucket = (ts) => {
+      const d = new Date(ts);
+      return idx[`${d.getFullYear()}-${d.getMonth()}`];
+    };
+    requisitions.forEach((r) => {
+      if (costDept !== "all" && r.deptId !== costDept) return;
+      const n = bucket(r.createdAt);
+      if (n === undefined) return;
+      const net = r.qty - (r.returnedQty || 0);
+      if (net > 0) months[n].req += net * priceOf(r.itemId);
+    });
+    purchaseOrders.forEach((p) => {
+      if (p.status === "rejected") return;
+      if (costDept !== "all" && p.deptId !== costDept) return;
+      const n = bucket(p.createdAt);
+      if (n === undefined) return;
+      months[n].po += (Number(p.qty) || 0) * (Number(p.unitPrice) || 0);
+    });
+    return months;
+  }, [requisitions, purchaseOrders, items, costDept]);
   const costTotal = costRows.reduce(
     (a, r) => ({ reqValue: a.reqValue + r.reqValue, poValue: a.poValue + r.poValue, poReceived: a.poReceived + r.poReceived }),
     { reqValue: 0, poValue: 0, poReceived: 0 }
@@ -1332,9 +1374,53 @@ function Dashboard({ items, requisitions, purchaseOrders, user, notify, dark }) 
       )}
       {isAdmin && (
         <div className={`rounded-2xl border overflow-hidden ${card}`}>
-          <div className={`px-5 py-4 border-b flex items-center gap-2 ${borderCol}`}>
-            <FileText size={16} className="text-[#1E3A5F]" />
-            <h3 className={`font-medium text-sm ${headText}`}>ค่าใช้จ่ายแยกตามแผนก</h3>
+          <div className={`px-5 py-4 border-b ${borderCol}`}>
+            <div className="flex items-center gap-2 mb-3">
+              <FileText size={16} className="text-[#1E3A5F]" />
+              <h3 className={`font-medium text-sm ${headText}`}>ค่าใช้จ่ายแยกตามแผนก</h3>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {[["month", "เดือนนี้"], ["year", "ปีนี้"], ["all", "ทั้งหมด"]].map(([key, label]) => (
+                <button
+                  key={key}
+                  onClick={() => setCostPeriod(key)}
+                  className={`px-3.5 py-1.5 rounded-full text-xs font-medium transition-colors ${
+                    costPeriod === key ? "bg-[#1E3A5F] text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+              <select
+                value={costDept}
+                onChange={(e) => setCostDept(e.target.value)}
+                className="ml-auto px-3 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-700 bg-white focus:outline-none focus:ring-2 focus:ring-[#1E3A5F]/20"
+              >
+                <option value="all">ทุกแผนก</option>
+                {DEPARTMENTS.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                <option value="admin">Admin (สั่งเอง)</option>
+              </select>
+            </div>
+          </div>
+          {/* Headline numbers for the selected filter */}
+          <div className={`grid grid-cols-2 lg:grid-cols-4 gap-px ${dark ? "bg-white/10" : "bg-slate-100"}`}>
+            <div className={`p-4 ${dark ? "bg-[#0d1f38]" : "bg-white"}`}>
+              <div className={`text-[11px] ${subText}`}>ค่าใช้จ่ายรวม</div>
+              <div className="text-xl font-bold text-[#1E3A5F] mt-0.5">฿{fmtMoney(costTotal.reqValue + costTotal.poValue)}</div>
+              <div className={`text-[10px] mt-0.5 ${subText}`}>เบิก + สั่งซื้อ</div>
+            </div>
+            <div className={`p-4 ${dark ? "bg-[#0d1f38]" : "bg-white"}`}>
+              <div className={`text-[11px] ${subText}`}>มูลค่าเบิกของ</div>
+              <div className={`text-xl font-bold mt-0.5 ${headText}`}>฿{fmtMoney(costTotal.reqValue)}</div>
+            </div>
+            <div className={`p-4 ${dark ? "bg-[#0d1f38]" : "bg-white"}`}>
+              <div className={`text-[11px] ${subText}`}>มูลค่าสั่งซื้อ</div>
+              <div className={`text-xl font-bold mt-0.5 ${headText}`}>฿{fmtMoney(costTotal.poValue)}</div>
+            </div>
+            <div className={`p-4 ${dark ? "bg-[#0d1f38]" : "bg-white"}`}>
+              <div className={`text-[11px] ${subText}`}>รับของแล้ว</div>
+              <div className="text-xl font-bold text-emerald-600 mt-0.5">฿{fmtMoney(costTotal.poReceived)}</div>
+            </div>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -1378,8 +1464,44 @@ function Dashboard({ items, requisitions, purchaseOrders, user, notify, dark }) 
               </tbody>
             </table>
           </div>
+          {/* 12-month trend for the selected department */}
+          <div className={`px-5 py-4 border-t ${borderCol}`}>
+            <div className="flex items-center justify-between mb-3">
+              <h4 className={`text-xs font-medium ${headText}`}>
+                แนวโน้ม 12 เดือนล่าสุด{costDept !== "all" ? ` · ${(DEPARTMENTS.find((d) => d.id === costDept) || { name: "Admin (สั่งเอง)" }).name}` : ""}
+              </h4>
+              <div className={`flex items-center gap-3 text-[10px] ${subText}`}>
+                <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-[#1E3A5F]" /> เบิก</span>
+                <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-[#7FD4A8]" /> สั่งซื้อ</span>
+              </div>
+            </div>
+            {(() => {
+              const peak = Math.max(1, ...monthlyCost.map((m) => m.req + m.po));
+              return (
+                <div className="flex items-end gap-1.5 h-32">
+                  {monthlyCost.map((m) => {
+                    const total = m.req + m.po;
+                    const h = Math.round((total / peak) * 100);
+                    return (
+                      <div key={m.key} className="flex-1 flex flex-col items-center gap-1 min-w-0" title={`${m.label} · เบิก ฿${fmtMoney(m.req)} · สั่งซื้อ ฿${fmtMoney(m.po)}`}>
+                        <div className="w-full flex flex-col justify-end" style={{ height: "100px" }}>
+                          {total > 0 && (
+                            <div className="w-full rounded-t overflow-hidden flex flex-col justify-end" style={{ height: `${Math.max(h, 3)}%` }}>
+                              <div style={{ height: `${(m.po / total) * 100}%`, background: "#7FD4A8" }} />
+                              <div style={{ height: `${(m.req / total) * 100}%`, background: "#1E3A5F" }} />
+                            </div>
+                          )}
+                        </div>
+                        <span className={`text-[9px] ${subText} truncate w-full text-center`}>{m.label}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
+          </div>
           <div className={`px-5 py-2.5 text-xs ${subText}`}>
-            มูลค่าเบิกคำนวณจากราคาต่อหน่วยปัจจุบัน และหักรายการที่คืนแล้วออก
+            มูลค่าเบิกคำนวณจากราคาต่อหน่วยปัจจุบัน และหักรายการที่คืนแล้วออก · ไม่นับรายการที่ไม่อนุมัติ
           </div>
         </div>
       )}
