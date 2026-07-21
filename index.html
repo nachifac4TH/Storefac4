@@ -1891,7 +1891,7 @@ function Requisitions({ requisitions, setRequisitions, items, setItems, user, pu
     return Object.entries(count)
       .sort((a, b) => b[1] - a[1])
       .map(([id]) => myItems.find((i) => i.id === id))
-      .filter((i) => i && i.stock > 0)
+      .filter((i) => i && (i.stock > 0 || openReqsFor(i.id).length > 0))
       .slice(0, 6);
   }, [requisitions, myItems, user, isAdmin]);
   const catalog = myItems.filter((i) => {
@@ -2117,7 +2117,9 @@ function Requisitions({ requisitions, setRequisitions, items, setItems, user, pu
                     >
                       <span className="font-medium max-w-[140px] truncate">{i.name}</span>
                       <span className={dark ? "text-slate-400" : "text-slate-400"}>·</span>
-                      <span className="text-emerald-500 font-semibold">{i.stock}</span>
+                      <span className={i.stock > 0 ? "text-emerald-500 font-semibold" : "text-amber-500 font-semibold"}>
+                        {i.stock > 0 ? i.stock : "คืนได้"}
+                      </span>
                     </button>
                   ))}
                 </div>
@@ -2163,17 +2165,17 @@ function Requisitions({ requisitions, setRequisitions, items, setItems, user, pu
               {catalog.map((i) => {
                 const low = i.stock <= i.minStock;
                 const out = i.stock <= 0;
+                const returnable = openReqsFor(i.id).length > 0;
                 const pct = Math.max(4, Math.min(100, Math.round((i.stock / Math.max(i.minStock * 2, i.stock, 1)) * 100)));
                 const barColor = out ? "#ef4444" : low ? "#f59e0b" : "#22c55e";
                 return (
                   <button
                     key={i.id}
                     onClick={() => setPickedItem(i)}
-                    disabled={out}
-                    className={`text-left p-4 rounded-xl border transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
+                    className={`text-left p-4 rounded-xl border transition-all ${out && !returnable ? "opacity-60" : ""} ${
                       dark
-                        ? "bg-white/[0.04] border-white/10 hover:border-[#7FD4A8]/50 hover:bg-white/[0.07] disabled:hover:border-white/10"
-                        : "border-slate-200 hover:border-[#1E3A5F] hover:shadow-sm disabled:hover:border-slate-200"
+                        ? "bg-white/[0.04] border-white/10 hover:border-[#7FD4A8]/50 hover:bg-white/[0.07]"
+                        : "border-slate-200 hover:border-[#1E3A5F] hover:shadow-sm"
                     }`}
                   >
                     <div className="flex items-start gap-3">
@@ -2203,7 +2205,11 @@ function Requisitions({ requisitions, setRequisitions, items, setItems, user, pu
                               <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: barColor }} />
                               {out ? "ของหมด" : low ? `ใกล้หมด · เหลือ ${i.stock}` : `มีของ · ${i.stock} ${i.unit}`}
                             </span>
-                            {!out && <span className={`text-xs font-semibold shrink-0 ${dark ? "text-[#7FD4A8]" : "text-[#1E3A5F]"}`}>เบิก →</span>}
+                            {returnable ? (
+                              <span className={`text-xs font-semibold shrink-0 ${dark ? "text-emerald-300" : "text-emerald-700"}`}>คืนของ →</span>
+                            ) : !out ? (
+                              <span className={`text-xs font-semibold shrink-0 ${dark ? "text-[#7FD4A8]" : "text-[#1E3A5F]"}`}>เบิก →</span>
+                            ) : null}
                           </div>
                           <div className={`h-1.5 rounded-full overflow-hidden ${dark ? "bg-white/10" : "bg-slate-100"}`}>
                             <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, background: barColor }} />
@@ -2779,6 +2785,14 @@ function RequisitionDetail({ item, user, onSubmit, onClose, notify, openReqs = [
         </div>
         ) : (
         <div className="p-5 space-y-3">
+          {item.stock <= 0 && (
+            <div className="flex items-start gap-2 p-3 rounded-xl bg-red-50 border border-red-100">
+              <AlertTriangle size={16} className="text-red-500 shrink-0 mt-0.5" />
+              <div className="text-xs text-red-700 leading-relaxed">
+                <b>สินค้าหมดสต็อก</b> — เบิกไม่ได้ในตอนนี้ กรุณาแจ้งแอดมินหรือใช้เมนู "สั่งซื้อ" เพื่อขอสั่งของเพิ่ม
+              </div>
+            </div>
+          )}
           <Field label="ชื่อผู้เบิก" value={requestedBy} onChange={setRequestedBy} placeholder="พิมพ์ชื่อผู้เบิก" />
           <div>
             <Field label={`จำนวนที่ต้องการเบิก (${item.unit}) — สูงสุด ${item.stock}`} type="number" value={qty} onChange={setQty} />
