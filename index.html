@@ -223,7 +223,8 @@ const reqFromRow = (r) => ({ id: r.id, itemId: r.item_id, itemName: r.item_name,
 const poFromRow = (r) => ({ id: r.id, itemId: r.item_id, itemName: r.item_name, qty: r.qty, unitPrice: Number(r.unit_price), note: r.note || "", status: r.status, deptId: r.dept_id, deptName: r.dept_name, requestedBy: r.requested_by, line: r.line || "", machine: r.machine || "", urgent: !!r.urgent, imageUrls: r.image_urls || [], imageCount: (r.image_urls || []).length, createdAt: new Date(r.created_at).getTime(),
   budgetType: r.budget_type || "", poNo: r.po_no || "", model: r.model || "", drwNo: r.drw_no || "",
   supplier: r.supplier || "", planDate: r.plan_date || "", delivery: r.delivery || "",
-  invoiceNo: r.invoice_no || "", receivedAt: r.received_at ? new Date(r.received_at).getTime() : 0,
+  invoiceNo: r.invoice_no || "", invoiceDate: r.invoice_date || "",
+  receivedAt: r.received_at ? new Date(r.received_at).getTime() : 0,
   exportedAt: r.exported_at ? new Date(r.exported_at).getTime() : 0 });
 const LS_PREFIX = "nachi_store_";
 async function localLoadAll() {
@@ -445,8 +446,10 @@ const db = {
       budget_type: patch.budgetType || null, po_no: patch.poNo || null, model: patch.model || null,
       drw_no: patch.drwNo || null, supplier: patch.supplier || null, plan_date: patch.planDate || null,
       delivery: patch.delivery || null, invoice_no: patch.invoiceNo || null,
+      invoice_date: patch.invoiceDate || null,
       received_at: patch.receivedAt ? new Date(patch.receivedAt).toISOString() : null,
     };
+    if (patch.qty) row.qty = patch.qty;   // stock is added from this number, so save it first
     const { error } = await sb.from("purchase_orders").update(row).eq("id", id);
     if (error) throw error;
   },
@@ -3239,11 +3242,13 @@ const budgetHeaders = (type) =>
     ? ["PO.NO.", "DAY", "M-Y", "DESCRIPTION", "MODEL", "Q'TY", "PRICE", "AMOUNT", "PLAN", "LINE", "PROCESS", "HITEC", "INVOICE", "D", "M-Y2"]
     : ["PO.NO.", "D", "M-Y", "Name", "Model", "Drw.No./Series No.", "Q'TY", "Price/Unit", "TOTAL AMOUNT", "Plan", "LINE", "PROCESS", "SUPPIER", "DELIVERY", "INVOICE", "D2", "M-Y2"];
 const monthStart = (ts) => { const d = new Date(ts); return new Date(d.getFullYear(), d.getMonth(), 1); };
+const MY_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const fmtMY = (d) => `${MY_SHORT[d.getMonth()]}-${String(d.getFullYear()).slice(2)}`;
 const dayOf = (ts) => (ts ? new Date(ts).getDate() : "");
 function budgetRow(po, type) {
   const amount = (Number(po.qty) || 0) * (Number(po.unitPrice) || 0);
   const planDate = po.planDate ? new Date(po.planDate) : monthStart(po.createdAt);
-  const recTs = po.receivedAt || 0;
+  const recTs = po.invoiceDate ? new Date(po.invoiceDate).getTime() : (po.receivedAt || 0);
   const common = [
     po.poNo || "",
     dayOf(po.createdAt),
@@ -3305,11 +3310,14 @@ function BudgetDocModal({ po, mode, onSave, onClose }) {
     planDate: po.planDate || new Date(po.createdAt).toISOString().slice(0, 10),
     delivery: po.delivery || "",
     invoiceNo: po.invoiceNo || "",
-    receivedAt: po.receivedAt ? new Date(po.receivedAt).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10),
+    invoiceDate: po.invoiceDate || new Date().toISOString().slice(0, 10),
+    qty: String(po.qty || 1),
   });
   const set = (k) => (v) => setF((p) => ({ ...p, [k]: v }));
   const receiving = mode === "receive";
-  const ready = receiving ? f.invoiceNo.trim().length > 0 : true;
+  const qtyNum = toNum(f.qty, NaN);
+  const qtyOk = Number.isFinite(qtyNum) && qtyNum > 0;
+  const ready = qtyOk && (receiving ? f.invoiceNo.trim().length > 0 && !!f.invoiceDate : true);
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={onClose}>
       <div className="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
@@ -3343,13 +3351,49 @@ function BudgetDocModal({ po, mode, onSave, onClose }) {
             <Field label="Plan (เดือนตั้งงบ)" type="date" value={f.planDate} onChange={set("planDate")} />
             <Field label="DELIVERY" value={f.delivery} onChange={set("delivery")} placeholder="วันที่ หรือ FINISH" />
           </div>
-          <div className={`rounded-xl p-3 ${receiving ? "bg-emerald-50 border border-emerald-100" : "bg-slate-50"}`}>
+          <div className={`rounded-xl p-3 space-y-3 ${receiving ? "bg-emerald-50 border border-emerald-100" : "bg-slate-50 border border-slate-200"}`}>
+            <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide">ช่องที่ต้องลงในไฟล์งบ</div>
             <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Field label="Q'TY (จำนวน) *" type="number" value={f.qty} onChange={set("qty")} />
+                {!qtyOk && <div className="text-xs text-red-500 mt-1">กรอกจำนวนให้ถูกต้อง</div>}
+              </div>
               <Field label={`เลขที่ INVOICE${receiving ? " *" : ""}`} value={f.invoiceNo} onChange={set("invoiceNo")} placeholder="เช่น IV26060317" />
-              <Field label="วันที่รับของ" type="date" value={f.receivedAt} onChange={set("receivedAt")} />
+            </div>
+            <div>
+              <div className="flex items-end gap-2">
+                <div className="flex-1">
+                  <Field label="วันที่ Invoice / วันที่รับของ *" type="date" value={f.invoiceDate} onChange={set("invoiceDate")} />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => set("invoiceDate")(new Date().toISOString().slice(0, 10))}
+                  className="px-3 py-2 rounded-lg text-xs font-medium border border-slate-200 text-slate-600 hover:bg-slate-50 whitespace-nowrap"
+                >
+                  วันนี้
+                </button>
+              </div>
+              {/* Exactly what lands in the sheet */}
+              {f.invoiceDate && (() => {
+                const d = new Date(f.invoiceDate);
+                return (
+                  <div className="flex items-center gap-2 mt-2">
+                    <span className="text-[11px] text-slate-500">จะลงไฟล์เป็น</span>
+                    <span className="px-2 py-1 rounded-md bg-white border border-slate-200 text-xs font-mono text-slate-700">
+                      D2 = <b>{d.getDate()}</b>
+                    </span>
+                    <span className="px-2 py-1 rounded-md bg-white border border-slate-200 text-xs font-mono text-slate-700">
+                      M-Y2 = <b>{fmtMY(d)}</b>
+                    </span>
+                  </div>
+                );
+              })()}
+              <div className="text-[11px] text-slate-500 mt-1.5">
+                ตั้งเป็นวันที่กดรับของให้อัตโนมัติ — ถ้าใบ Invoice ลงวันที่อื่น แก้ตรงนี้ได้
+              </div>
             </div>
             {receiving && !f.invoiceNo.trim() && (
-              <div className="text-xs text-amber-600 mt-2">กรอกเลข Invoice ก่อน เพื่อให้ลงไฟล์งบได้ครบ</div>
+              <div className="text-xs text-amber-600">กรอกเลข Invoice ก่อน เพื่อให้ลงไฟล์งบได้ครบ</div>
             )}
           </div>
           <div className="flex gap-2 pt-1">
@@ -3449,8 +3493,9 @@ function PurchaseOrders({ purchaseOrders, setPurchaseOrders, items, setItems, us
     const patch = {
       budgetType: f.budgetType, poNo: f.poNo.trim(), model: f.model.trim(), drwNo: f.drwNo.trim(),
       supplier: f.supplier.trim(), planDate: f.planDate, delivery: f.delivery.trim(),
-      invoiceNo: f.invoiceNo.trim(),
-      receivedAt: f.receivedAt ? new Date(f.receivedAt).getTime() : 0,
+      invoiceNo: f.invoiceNo.trim(), invoiceDate: f.invoiceDate,
+      qty: Math.max(1, toNum(f.qty, po.qty)),
+      receivedAt: f.invoiceDate ? new Date(f.invoiceDate).getTime() : Date.now(),
     };
     setDocPO(null);
     if (db.cloud) {
@@ -3485,13 +3530,14 @@ function PurchaseOrders({ purchaseOrders, setPurchaseOrders, items, setItems, us
         let done = false;
         setPurchaseOrders((prev) =>
           prev.map((p) => {
-            if (p.id === po.id && p.status !== "received" && p.status !== "rejected" && p.status !== "pending_approval") { done = true; return { ...p, status: "received", receivedAt: Date.now() }; }
+            if (p.id === po.id && p.status !== "received" && p.status !== "rejected" && p.status !== "pending_approval") { done = true; return { ...p, ...patch, status: "received", receivedAt: patch.receivedAt || Date.now() }; }
             return p;
           })
         );
+        const qtyIn = patch.qty || po.qty;
         setItems((prev) => {
           if (!done) return prev;
-          return prev.map((i) => (i.id === po.itemId ? { ...i, stock: i.stock + po.qty } : i));
+          return prev.map((i) => (i.id === po.itemId ? { ...i, stock: i.stock + qtyIn } : i));
         });
         if (done) notify("success", "รับของเข้าคลังแล้ว");
       },
