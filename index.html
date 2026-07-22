@@ -220,7 +220,11 @@ const itemToRow = (i) => {
   return { sku: i.sku || "", name: i.name, unit: i.unit || "ชิ้น", stock: toNum(i.stock, 0), min_stock: toNum(i.minStock, 0), price: toNum(i.price, 0), category: i.category || "ทั่วไป", dept_id: tags[0] || "central", dept_ids: tags, supplier: i.supplier || "" };
 };
 const reqFromRow = (r) => ({ id: r.id, itemId: r.item_id, itemName: r.item_name, qty: r.qty, note: r.note || "", status: r.status, deptId: r.dept_id, deptName: r.dept_name, line: r.line || "", machine: r.machine || "", requestedBy: r.requested_by || "", returnedQty: r.returned_qty || 0, returnStatus: r.return_status || "", returnQtyRequested: r.return_qty_requested || 0, returnRequestedBy: r.return_requested_by || "", createdAt: new Date(r.created_at).getTime() });
-const poFromRow = (r) => ({ id: r.id, itemId: r.item_id, itemName: r.item_name, qty: r.qty, unitPrice: Number(r.unit_price), note: r.note || "", status: r.status, deptId: r.dept_id, deptName: r.dept_name, requestedBy: r.requested_by, line: r.line || "", machine: r.machine || "", urgent: !!r.urgent, imageUrls: r.image_urls || [], imageCount: (r.image_urls || []).length, createdAt: new Date(r.created_at).getTime() });
+const poFromRow = (r) => ({ id: r.id, itemId: r.item_id, itemName: r.item_name, qty: r.qty, unitPrice: Number(r.unit_price), note: r.note || "", status: r.status, deptId: r.dept_id, deptName: r.dept_name, requestedBy: r.requested_by, line: r.line || "", machine: r.machine || "", urgent: !!r.urgent, imageUrls: r.image_urls || [], imageCount: (r.image_urls || []).length, createdAt: new Date(r.created_at).getTime(),
+  budgetType: r.budget_type || "", poNo: r.po_no || "", model: r.model || "", drwNo: r.drw_no || "",
+  supplier: r.supplier || "", planDate: r.plan_date || "", delivery: r.delivery || "",
+  invoiceNo: r.invoice_no || "", receivedAt: r.received_at ? new Date(r.received_at).getTime() : 0,
+  exportedAt: r.exported_at ? new Date(r.exported_at).getTime() : 0 });
 const LS_PREFIX = "nachi_store_";
 async function localLoadAll() {
   const keys = ["items", "requisitions", "purchaseOrders"];
@@ -408,6 +412,9 @@ const db = {
       note: po.note || "", status: po.status || "pending_approval", dept_id: po.deptId, dept_name: po.deptName,
       requested_by: po.requestedBy, line: po.line || "", machine: po.machine || "",
       image_urls: po.imageUrls || [], urgent: !!po.urgent,
+      budget_type: po.budgetType || null, po_no: po.poNo || null, model: po.model || null,
+      drw_no: po.drwNo || null, supplier: po.supplier || null,
+      plan_date: po.planDate || null, delivery: po.delivery || null,
     };
     const { data, error } = await sb.from("purchase_orders").insert(row).select().single();
     if (error) throw error;
@@ -419,10 +426,35 @@ const db = {
     const { error } = await sb.from("purchase_orders").update(patch).eq("id", id);
     if (error) throw error;
   },
-  async receivePO(id) {
+  async receivePO(id, extra = {}) {
     if (!CLOUD) return null;
-    const { error } = await sb.rpc("receive_po", { p_po_id: id });
+    if (extra.invoiceNo || extra.receivedAt) {
+      const patch = {};
+      if (extra.invoiceNo) patch.invoice_no = extra.invoiceNo;
+      if (extra.receivedAt) patch.received_at = new Date(extra.receivedAt).toISOString();
+      const { error: e1 } = await sb.from("purchase_orders").update(patch).eq("id", id);
+      if (e1) throw e1;
+    }
+    const { data, error } = await sb.rpc("receive_po", { p_po_id: id });
     if (error) throw error;
+    return data ? poFromRow(Array.isArray(data) ? data[0] : data) : null;
+  },
+  async updatePODoc(id, patch) {
+    if (!CLOUD) return null;
+    const row = {
+      budget_type: patch.budgetType || null, po_no: patch.poNo || null, model: patch.model || null,
+      drw_no: patch.drwNo || null, supplier: patch.supplier || null, plan_date: patch.planDate || null,
+      delivery: patch.delivery || null, invoice_no: patch.invoiceNo || null,
+      received_at: patch.receivedAt ? new Date(patch.receivedAt).toISOString() : null,
+    };
+    const { error } = await sb.from("purchase_orders").update(row).eq("id", id);
+    if (error) throw error;
+  },
+  async markExported(ids) {
+    if (!CLOUD || !ids.length) return 0;
+    const { data, error } = await sb.rpc("mark_po_exported", { p_ids: ids });
+    if (error) throw error;
+    return data || 0;
   },
   async deleteRequisition(id) {
     if (!CLOUD) return null;
@@ -3195,8 +3227,151 @@ function RequisitionDetail({ item, user, onSubmit, onClose, notify, openReqs = [
     </div>
   );
 }
-function PurchaseOrders({ purchaseOrders, setPurchaseOrders, items, setItems, user, notify, confirm, dark }) {
+const BUDGET_TYPES = [
+  { id: "EXP", label: "EXP.", sheet: "EXP." },
+  { id: "REPAIR", label: "REPAIR", sheet: "REPAIR" },
+  { id: "SUBSIDIARY", label: "SUBSIDIARY", sheet: "SUBSIDIARY" },
+];
+const PROCESS_CODE = { first_grinding: "FG", grinding: "GR", assembly: "ASSY", admin: "ALL", central: "ALL" };
+const processOf = (deptId) => PROCESS_CODE[deptId] || "ALL";
+const budgetHeaders = (type) =>
+  type === "SUBSIDIARY"
+    ? ["PO.NO.", "DAY", "M-Y", "DESCRIPTION", "MODEL", "Q'TY", "PRICE", "AMOUNT", "PLAN", "LINE", "PROCESS", "HITEC", "INVOICE", "D", "M-Y2"]
+    : ["PO.NO.", "D", "M-Y", "Name", "Model", "Drw.No./Series No.", "Q'TY", "Price/Unit", "TOTAL AMOUNT", "Plan", "LINE", "PROCESS", "SUPPIER", "DELIVERY", "INVOICE", "D2", "M-Y2"];
+const monthStart = (ts) => { const d = new Date(ts); return new Date(d.getFullYear(), d.getMonth(), 1); };
+const dayOf = (ts) => (ts ? new Date(ts).getDate() : "");
+function budgetRow(po, type) {
+  const amount = (Number(po.qty) || 0) * (Number(po.unitPrice) || 0);
+  const planDate = po.planDate ? new Date(po.planDate) : monthStart(po.createdAt);
+  const recTs = po.receivedAt || 0;
+  const common = [
+    po.poNo || "",
+    dayOf(po.createdAt),
+    monthStart(po.createdAt),
+    po.itemName || "",
+    po.model || "",
+  ];
+  const tail = [
+    Number(po.qty) || 0,
+    Number(po.unitPrice) || 0,
+    amount,
+    planDate,
+    po.line || "ALL",
+    processOf(po.deptId),
+    po.supplier || "",
+  ];
+  if (type === "SUBSIDIARY") {
+    return [...common, ...tail.slice(0, 6), po.supplier || "", po.invoiceNo || "", dayOf(recTs), recTs ? monthStart(recTs) : ""];
+  }
+  return [...common, po.drwNo || "", ...tail, po.delivery || "", po.invoiceNo || "", dayOf(recTs), recTs ? monthStart(recTs) : ""];
+}
+function stockPartRow(req, item, type) {
+  const price = item ? Number(item.price) || 0 : 0;
+  const qty = req.qty - (req.returnedQty || 0);
+  const common = [
+    "",
+    dayOf(req.createdAt),
+    monthStart(req.createdAt),
+    req.itemName || "",
+    item ? item.sku || "" : "",
+  ];
+  const tail = [qty, price, qty * price, monthStart(req.createdAt), req.line || "ALL", processOf(req.deptId), "STOCK PART"];
+  if (type === "SUBSIDIARY") {
+    return [...common, ...tail.slice(0, 6), "STOCK PART", "", dayOf(req.createdAt), monthStart(req.createdAt)];
+  }
+  return [...common, "", ...tail, "STOCK PART", "", dayOf(req.createdAt), monthStart(req.createdAt)];
+}
+function exportBudgetSheet({ type, rows, filename }) {
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet([budgetHeaders(type), ...rows], { cellDates: true });
+  const monthCols = type === "SUBSIDIARY" ? [2, 8, 14] : [2, 9, 16];
+  const range = XLSX.utils.decode_range(ws["!ref"]);
+  for (let r = 1; r <= range.e.r; r++) {
+    monthCols.forEach((c) => {
+      const cell = ws[XLSX.utils.encode_cell({ r, c })];
+      if (cell && cell.t === "d") cell.z = "mmm-yy";
+    });
+  }
+  XLSX.utils.book_append_sheet(wb, ws, type.slice(0, 28));
+  XLSX.writeFile(wb, filename);
+}
+function BudgetDocModal({ po, mode, onSave, onClose }) {
+  const [f, setF] = useState({
+    budgetType: po.budgetType || "EXP",
+    poNo: po.poNo || "",
+    model: po.model || "",
+    drwNo: po.drwNo || "",
+    supplier: po.supplier || "",
+    planDate: po.planDate || new Date(po.createdAt).toISOString().slice(0, 10),
+    delivery: po.delivery || "",
+    invoiceNo: po.invoiceNo || "",
+    receivedAt: po.receivedAt ? new Date(po.receivedAt).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10),
+  });
+  const set = (k) => (v) => setF((p) => ({ ...p, [k]: v }));
+  const receiving = mode === "receive";
+  const ready = receiving ? f.invoiceNo.trim().length > 0 : true;
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={onClose}>
+      <div className="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="p-5 border-b border-slate-100">
+          <h3 className="font-semibold text-slate-800 text-lg">{receiving ? "รับของเข้าคลัง" : "ข้อมูลเอกสาร (ลงไฟล์งบประมาณ)"}</h3>
+          <div className="text-sm text-slate-500 mt-0.5">{po.itemName} × {po.qty}</div>
+        </div>
+        <div className="p-5 space-y-3">
+          <div>
+            <span className="text-xs text-slate-500 mb-1.5 block">ลงชีตไหน</span>
+            <div className="flex gap-2">
+              {BUDGET_TYPES.map((b) => (
+                <button
+                  key={b.id}
+                  type="button"
+                  onClick={() => set("budgetType")(b.id)}
+                  className={`flex-1 py-2 rounded-lg text-sm font-semibold transition-colors ${
+                    f.budgetType === b.id ? "bg-[#1E3A5F] text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                  }`}
+                >
+                  {b.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="เลขที่ PO (จากฝ่ายจัดซื้อ)" value={f.poNo} onChange={set("poNo")} placeholder="เช่น 1111" />
+            <Field label="ผู้ขาย (SUPPLIER)" value={f.supplier} onChange={set("supplier")} placeholder="เช่น HITEC" />
+            <Field label="Model" value={f.model} onChange={set("model")} />
+            <Field label="Drw.No. / Series No." value={f.drwNo} onChange={set("drwNo")} />
+            <Field label="Plan (เดือนตั้งงบ)" type="date" value={f.planDate} onChange={set("planDate")} />
+            <Field label="DELIVERY" value={f.delivery} onChange={set("delivery")} placeholder="วันที่ หรือ FINISH" />
+          </div>
+          <div className={`rounded-xl p-3 ${receiving ? "bg-emerald-50 border border-emerald-100" : "bg-slate-50"}`}>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label={`เลขที่ INVOICE${receiving ? " *" : ""}`} value={f.invoiceNo} onChange={set("invoiceNo")} placeholder="เช่น IV26060317" />
+              <Field label="วันที่รับของ" type="date" value={f.receivedAt} onChange={set("receivedAt")} />
+            </div>
+            {receiving && !f.invoiceNo.trim() && (
+              <div className="text-xs text-amber-600 mt-2">กรอกเลข Invoice ก่อน เพื่อให้ลงไฟล์งบได้ครบ</div>
+            )}
+          </div>
+          <div className="flex gap-2 pt-1">
+            <button onClick={onClose} className="flex-1 py-2.5 rounded-xl border border-slate-200 text-sm font-medium text-slate-600 hover:bg-slate-50">ยกเลิก</button>
+            <button
+              onClick={() => onSave(f)}
+              disabled={!ready}
+              className={`flex-1 py-2.5 rounded-xl text-white text-sm font-semibold disabled:opacity-40 ${receiving ? "bg-emerald-600 hover:bg-emerald-500" : "bg-[#1E3A5F] hover:bg-[#16304F]"}`}
+            >
+              {receiving ? "ยืนยันรับของ + เพิ่มสต็อก" : "บันทึก"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+function PurchaseOrders({ purchaseOrders, setPurchaseOrders, items, setItems, user, notify, confirm, dark, requisitions = [] }) {
   const [showNew, setShowNew] = useState(false);
+  const [docPO, setDocPO] = useState(null);       // { po, mode: "edit" | "receive" }
+  const [exportType, setExportType] = useState("EXP");
+  const [onlyNew, setOnlyNew] = useState(true);   // skip rows already pasted into Excel
   const [search, setSearch] = useState("");
   const [previewImg, setPreviewImg] = useState(null); // { urls, index, title }
   const isAdmin = user.id === "admin";
@@ -3231,14 +3406,72 @@ function PurchaseOrders({ purchaseOrders, setPurchaseOrders, items, setItems, us
     if (db.cloud) { db.updatePOStatus(po.id, status).catch(() => notify("error", "อัปเดตสถานะไม่สำเร็จ")); return; }
     setPurchaseOrders((prev) => prev.map((p) => (p.id === po.id ? { ...p, status } : p)));
   };
-  const receive = (po) => {
+  const exportable = purchaseOrders.filter(
+    (p) => p.status === "received" && (p.budgetType || "EXP") === exportType && (!onlyNew || !p.exportedAt)
+  );
+  const runExport = async () => {
+    if (exportable.length === 0) { notify("error", "ไม่มีรายการให้ส่งออก"); return; }
+    const rows = exportable
+      .slice()
+      .sort((a, b) => (a.receivedAt || a.createdAt) - (b.receivedAt || b.createdAt))
+      .map((p) => budgetRow(p, exportType));
+    const stamp = new Date().toISOString().slice(0, 10);
+    try {
+      exportBudgetSheet({ type: exportType, rows, filename: `BUDGET_${exportType}_${stamp}.xlsx` });
+      const ids = exportable.map((p) => p.id);
+      if (db.cloud) await db.markExported(ids);
+      const now = Date.now();
+      setPurchaseOrders((prev) => prev.map((p) => (ids.includes(p.id) ? { ...p, exportedAt: now } : p)));
+      notify("success", `ส่งออก ${rows.length} แถวแล้ว — วางต่อท้ายชีต ${exportType}`);
+    } catch (e) {
+      notify("error", "ส่งออกไม่สำเร็จ: " + (e && e.message ? e.message : ""));
+    }
+  };
+  const exportStockParts = () => {
+    const now = new Date();
+    const rows = requisitions
+      .filter((r) => {
+        const d = new Date(r.createdAt);
+        return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear() && r.qty - (r.returnedQty || 0) > 0;
+      })
+      .sort((a, b) => a.createdAt - b.createdAt)
+      .map((r) => stockPartRow(r, items.find((i) => i.id === r.itemId), exportType));
+    if (rows.length === 0) { notify("error", "เดือนนี้ยังไม่มีการเบิกของ"); return; }
+    exportBudgetSheet({
+      type: exportType,
+      rows,
+      filename: `BUDGET_${exportType}_STOCKPART_${now.toISOString().slice(0, 7)}.xlsx`,
+    });
+    notify("success", `ส่งออกรายการเบิกจากคลัง ${rows.length} แถว`);
+  };
+  const receive = (po) => setDocPO({ po, mode: "receive" });
+  const saveDoc = ({ po, mode }, f) => {
+    const patch = {
+      budgetType: f.budgetType, poNo: f.poNo.trim(), model: f.model.trim(), drwNo: f.drwNo.trim(),
+      supplier: f.supplier.trim(), planDate: f.planDate, delivery: f.delivery.trim(),
+      invoiceNo: f.invoiceNo.trim(),
+      receivedAt: f.receivedAt ? new Date(f.receivedAt).getTime() : 0,
+    };
+    setDocPO(null);
+    if (db.cloud) {
+      db.updatePODoc(po.id, patch)
+        .then(() => { if (mode === "receive") return doReceive(po, patch); notify("success", "บันทึกข้อมูลเอกสารแล้ว"); })
+        .catch(() => notify("error", "บันทึกไม่สำเร็จ"));
+      setPurchaseOrders((prev) => prev.map((p) => (p.id === po.id ? { ...p, ...patch } : p)));
+      return;
+    }
+    setPurchaseOrders((prev) => prev.map((p) => (p.id === po.id ? { ...p, ...patch } : p)));
+    if (mode === "receive") doReceive(po, patch);
+    else notify("success", "บันทึกข้อมูลเอกสารแล้ว");
+  };
+  const doReceive = (po, patch = {}) => {
     confirm({
       title: "ยืนยันรับของเข้าคลัง?",
       message: `รับ "${po.itemName}" จำนวน ${po.qty} เข้าสต็อกใช่หรือไม่`,
       confirmLabel: "รับของ",
       onConfirm: () => {
         if (db.cloud) {
-          db.receivePO(po.id)
+          db.receivePO(po.id, { invoiceNo: patch.invoiceNo, receivedAt: patch.receivedAt })
             .then(async () => {
               if (po.imageUrls && po.imageUrls.length) {
                 await db.deleteImages(po.imageUrls);
@@ -3314,6 +3547,56 @@ function PurchaseOrders({ purchaseOrders, setPurchaseOrders, items, setItems, us
   };
   return (
     <div className="space-y-4">
+      {isAdmin && (
+        <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden">
+          <div className="px-5 py-3.5 border-b border-slate-100 flex items-center gap-2">
+            <FileText size={16} className="text-[#1E3A5F]" />
+            <h3 className="font-medium text-sm text-slate-800">ส่งออกลงไฟล์งบประมาณ (BUDGET_FAC_4)</h3>
+          </div>
+          <div className="p-5 space-y-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-slate-500">ชีต:</span>
+              {BUDGET_TYPES.map((b) => (
+                <button
+                  key={b.id}
+                  onClick={() => setExportType(b.id)}
+                  className={`px-3.5 py-1.5 rounded-full text-xs font-semibold transition-colors ${
+                    exportType === b.id ? "bg-[#1E3A5F] text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                  }`}
+                >
+                  {b.label}
+                </button>
+              ))}
+              <label className="ml-auto flex items-center gap-2 text-xs text-slate-600 cursor-pointer">
+                <input type="checkbox" checked={onlyNew} onChange={(e) => setOnlyNew(e.target.checked)} className="rounded" />
+                เฉพาะที่ยังไม่ได้ส่งออก
+              </label>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={runExport}
+                disabled={exportable.length === 0}
+                className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-500 disabled:opacity-40"
+              >
+                <FileText size={15} /> ส่งออก {exportable.length} รายการที่รับของแล้ว
+              </button>
+              <button
+                onClick={exportStockParts}
+                className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl border border-slate-200 text-sm font-medium text-slate-600 hover:bg-slate-50"
+              >
+                <Package size={15} /> เบิกจากคลังเดือนนี้ (STOCK PART)
+              </button>
+            </div>
+            <div className="text-xs text-slate-500 leading-relaxed bg-slate-50 rounded-lg p-3">
+              <b>วิธีใช้:</b> เปิดไฟล์ที่ได้ → คัดลอกแถวข้อมูล (ไม่เอาหัวตาราง) → คลิกแถวว่างใต้ตารางในชีต <b>{exportType}</b> → วาง
+              <br />
+              จากนั้นเลือกช่อง <b>AMOUNT</b> ของแถวใหม่ แล้วกด <b>Ctrl+D</b> เพื่อคืนสูตรให้เหมือนแถวอื่น
+              <br />
+              คอลัมน์เรียงตรงกับชีตแล้ว — รายการที่ส่งออกแล้วจะถูกทำเครื่องหมายไว้ ไม่ถูกส่งออกซ้ำ
+            </div>
+          </div>
+        </div>
+      )}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div className={`text-sm ${dark ? "text-slate-400" : "text-slate-500"}`}>
           มูลค่าค้างรับ{isAdmin ? " (ทุกแผนก)" : ""}: <span className={`font-semibold ${dark ? "text-white" : "text-slate-700"}`}>฿{fmtMoney(totalOpenValue)}</span>
@@ -3423,6 +3706,17 @@ function PurchaseOrders({ purchaseOrders, setPurchaseOrders, items, setItems, us
                   {/* User: status only */}
                   {!isAdmin && <Badge status={po.status} map={PO_STATUS} />}
                   {isAdmin && (
+                    <button
+                      onClick={() => setDocPO({ po, mode: "edit" })}
+                      title="ข้อมูลเอกสารสำหรับไฟล์งบประมาณ"
+                      className={`flex items-center gap-1 text-xs px-2.5 py-2 rounded-lg font-medium whitespace-nowrap transition-colors ${
+                        po.poNo ? "bg-slate-100 text-slate-600 hover:bg-slate-200" : "bg-amber-50 text-amber-700 hover:bg-amber-100"
+                      }`}
+                    >
+                      <FileText size={13} /> {po.poNo ? `PO ${po.poNo}` : "กรอกเอกสาร"}
+                    </button>
+                  )}
+                  {isAdmin && (
                     <button onClick={() => deletePO(po)} className="p-2 rounded-lg text-red-500 hover:bg-red-50" title="ลบรายการ" aria-label="ลบรายการสั่งซื้อ">
                       <Trash2 size={15} />
                     </button>
@@ -3433,6 +3727,14 @@ function PurchaseOrders({ purchaseOrders, setPurchaseOrders, items, setItems, us
           </div>
         )}
       </div>
+      {docPO && (
+        <BudgetDocModal
+          po={docPO.po}
+          mode={docPO.mode}
+          onClose={() => setDocPO(null)}
+          onSave={(f) => saveDoc(docPO, f)}
+        />
+      )}
       {showNew && (
         <NewPOForm
           items={visibleItems(items, user)}
@@ -3960,7 +4262,7 @@ function App() {
           />
         )}
         {activeTab === "po" && (
-          <PurchaseOrders purchaseOrders={purchaseOrders} setPurchaseOrders={setPurchaseOrders} items={items} setItems={setItems} user={user} notify={notify} confirm={confirm} dark={dark} />
+          <PurchaseOrders purchaseOrders={purchaseOrders} setPurchaseOrders={setPurchaseOrders} items={items} setItems={setItems} user={user} notify={notify} confirm={confirm} dark={dark} requisitions={requisitions} />
         )}
       </main>
       <ConfirmModal
