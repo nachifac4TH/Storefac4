@@ -434,7 +434,7 @@ const db = {
       if (extra.invoiceNo) patch.invoice_no = extra.invoiceNo;
       if (extra.receivedAt) patch.received_at = new Date(extra.receivedAt).toISOString();
       const { error: e1 } = await sb.from("purchase_orders").update(patch).eq("id", id);
-      if (e1) throw e1;
+      if (e1 && e1.code !== "PGRST204" && !/column/i.test(String(e1.message || ""))) throw e1;
     }
     const { data, error } = await sb.rpc("receive_po", { p_po_id: id });
     if (error) throw error;
@@ -450,8 +450,19 @@ const db = {
       received_at: patch.receivedAt ? new Date(patch.receivedAt).toISOString() : null,
     };
     if (patch.qty) row.qty = patch.qty;   // stock is added from this number, so save it first
-    const { error } = await sb.from("purchase_orders").update(row).eq("id", id);
-    if (error) throw error;
+    const skipped = [];
+    for (let attempt = 0; attempt < 14; attempt++) {
+      const { error } = await sb.from("purchase_orders").update(row).eq("id", id);
+      if (!error) return { skipped };
+      const msg = String(error.message || "");
+      const hit = Object.keys(row).find((c) => msg.includes(`'${c}'`) || msg.includes(`"${c}"`));
+      const missing = error.code === "PGRST204" || /column/i.test(msg);
+      if (!missing || !hit) throw error;
+      delete row[hit];
+      skipped.push(hit);
+      if (Object.keys(row).length === 0) return { skipped };
+    }
+    return { skipped };
   },
   async markExported(ids) {
     if (!CLOUD || !ids.length) return 0;
@@ -3548,8 +3559,18 @@ function PurchaseOrders({ purchaseOrders, setPurchaseOrders, items, setItems, us
     setDocPO(null);
     if (db.cloud) {
       db.updatePODoc(po.id, patch)
-        .then(() => { if (mode === "receive") return doReceive(po, patch); notify("success", "บันทึกข้อมูลเอกสารแล้ว"); })
-        .catch(() => notify("error", "บันทึกไม่สำเร็จ"));
+        .then((res) => {
+          const skipped = (res && res.skipped) || [];
+          if (skipped.length) {
+            notify("error", `ฐานข้อมูลยังไม่มีคอลัมน์: ${skipped.join(", ")} — กรุณารัน add_budget_fields.sql ใน Supabase`);
+          }
+          if (mode === "receive") return doReceive(po, patch);
+          if (!skipped.length) notify("success", "บันทึกข้อมูลเอกสารแล้ว");
+        })
+        .catch((e) => {
+          notify("error", "บันทึกเอกสารไม่สำเร็จ: " + (e && e.message ? e.message : "ไม่ทราบสาเหตุ"));
+          if (mode === "receive") doReceive(po, patch);
+        });
       setPurchaseOrders((prev) => prev.map((p) => (p.id === po.id ? { ...p, ...patch } : p)));
       return;
     }
